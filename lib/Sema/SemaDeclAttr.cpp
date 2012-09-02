@@ -4612,6 +4612,26 @@ static void handleUuidAttr(Sema &S, Decl *D, const AttributeList &Attr) {
     S.Diag(Attr.getLoc(), diag::warn_attribute_ignored) << "uuid";
 }
 
+static bool hasOtherInheritanceAttr(Decl *D, AttributeList::Kind Kind,
+                                    int &Existing) {
+  if (Kind != AttributeList::AT_SingleInheritance &&
+      D->hasAttr<SingleInheritanceAttr>()) {
+    Existing = 0;
+    return true;
+  }
+  else if (Kind != AttributeList::AT_MultipleInheritance &&
+      D->hasAttr<MultipleInheritanceAttr>()) {
+    Existing = 1;
+    return true;
+  }
+  else if (Kind != AttributeList::AT_VirtualInheritance &&
+      D->hasAttr<VirtualInheritanceAttr>()) {
+    Existing = 2;
+    return true;
+  }
+  return false;
+}
+
 static void handleInheritanceAttr(Sema &S, Decl *D, const AttributeList &Attr) {
   if (!S.LangOpts.MicrosoftExt) {
     S.Diag(Attr.getLoc(), diag::warn_attribute_ignored) << Attr.getName();
@@ -4619,6 +4639,13 @@ static void handleInheritanceAttr(Sema &S, Decl *D, const AttributeList &Attr) {
   }
 
   AttributeList::Kind Kind = Attr.getKind();
+
+  int Existing;
+  if (hasOtherInheritanceAttr(D->getCanonicalDecl(), Kind, Existing)) {
+      S.Diag(Attr.getLoc(), diag::warn_ms_inheritance_already_declared) << Existing;
+      return;
+  }
+
   if (Kind == AttributeList::AT_SingleInheritance)
     D->addAttr(
         ::new (S.Context)

@@ -1714,6 +1714,7 @@ QualType Sema::BuildMemberPointerType(QualType T, QualType Class,
     return QualType();
   }
 
+#if 0
   // C++ allows the class type in a member pointer to be an incomplete type.
   // In the Microsoft ABI, the size of the member pointer can vary
   // according to the class type, which means that we really need a
@@ -1726,6 +1727,7 @@ QualType Sema::BuildMemberPointerType(QualType T, QualType Class,
   if (Context.getTargetInfo().getCXXABI().isMicrosoft() &&
       RequireCompleteType(Loc, Class, diag::err_incomplete_type))
     return QualType();
+#endif
 
   return Context.getMemberPointerType(T, Class.getTypePtr());
 }
