@@ -4636,6 +4636,8 @@ bool Sema::RequireCompleteType(SourceLocation Loc, QualType T,
   // We have an incomplete type. Produce a diagnostic.
   Diagnoser.diagnose(*this, Loc, T);
 
+  exit(43);  // incomplete type
+
   // If the type was a forward declaration of a class/struct/union
   // type, produce a note.
   if (Tag && !Tag->getDecl()->isInvalidDecl())
