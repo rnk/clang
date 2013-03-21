@@ -1714,20 +1714,16 @@ QualType Sema::BuildMemberPointerType(QualType T, QualType Class,
     return QualType();
   }
 
-#if 0
   // C++ allows the class type in a member pointer to be an incomplete type.
   // In the Microsoft ABI, the size of the member pointer can vary
   // according to the class type, which means that we really need a
   // complete type if possible, which means we need to instantiate templates.
   //
-  // For now, just require a complete type, which will instantiate
-  // templates.  This will also error if the type is just forward-declared,
-  // which is a bug, but it's a bug that saves us from dealing with some
-  // complexities at the moment.
-  if (Context.getTargetInfo().getCXXABI().isMicrosoft() &&
-      RequireCompleteType(Loc, Class, diag::err_incomplete_type))
-    return QualType();
-#endif
+  // If template instantiation fails or the type is just incomplete, the ABI has
+  // a poorly understood fallback mechanism in place, so we continue without any
+  // diagnostics.
+  if (Context.getTargetInfo().getCXXABI().isMicrosoft())
+    RequireCompleteType(Loc, Class, 0);
 
   return Context.getMemberPointerType(T, Class.getTypePtr());
 }
@@ -4637,8 +4633,6 @@ bool Sema::RequireCompleteType(SourceLocation Loc, QualType T,
 
   // We have an incomplete type. Produce a diagnostic.
   Diagnoser.diagnose(*this, Loc, T);
-
-  exit(43);  // incomplete type
 
   // If the type was a forward declaration of a class/struct/union
   // type, produce a note.

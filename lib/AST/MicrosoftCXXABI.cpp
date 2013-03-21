@@ -13,6 +13,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "CXXABI.h"
+#include "clang/AST/Attr.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/RecordLayout.h"
@@ -52,27 +53,57 @@ public:
 };
 }
 
+// getNumBases() seems to only give us the number of direct bases, and not the
+// total.  This function tells us if we inherit from anybody that uses MI.
+static bool recordHasMultipleInheritance(const CXXRecordDecl *RD) {
+  while (RD->getNumBases() > 0) {
+    if (RD->getNumBases() > 1)
+      return true;
+    assert(RD->getNumBases() == 1);
+    RD = RD->bases_begin()->getType()->getAsCXXRecordDecl();
+  }
+  return false;
+}
+
 unsigned MicrosoftCXXABI::getMemberPointerSize(const MemberPointerType *MPT) const {
   QualType Pointee = MPT->getPointeeType();
   CXXRecordDecl *RD = MPT->getClass()->getAsCXXRecordDecl();
+  attr::Kind Inheritance;
 
   if (RD->getTypeForDecl()->isIncompleteType()) {
-    if (RD->hasAttr<SingleInheritanceAttr>())
-      return 1;
-    else if (RD->hasAttr<MultipleInheritanceAttr>())
-      return 2;
+    if (Attr *IA = RD->getAttr<SingleInheritanceAttr>())
+      Inheritance = IA->getKind();
+    else if (Attr *IA = RD->getAttr<MultipleInheritanceAttr>())
+      Inheritance = IA->getKind();
+    else if (Attr *IA = RD->getAttr<VirtualInheritanceAttr>())
+      Inheritance = IA->getKind();
+    else {
+      // This last case seems like an error, but MSVC allocates one more slot
+      // than is used for virtual inheritance.  We follow suit for
+      // compatibility.
+      // FIXME: Issue a warning.
+      return 3 + int(Pointee->isFunctionType());
+    }
+  } else {
+    if (RD->getNumVBases() > 0)
+      Inheritance = attr::VirtualInheritance;
+    else if (recordHasMultipleInheritance(RD))
+      Inheritance = attr::MultipleInheritance;
     else
-      return 3;
+      Inheritance = attr::SingleInheritance;
   }
 
-  if (RD->getNumVBases() > 0) {
-    if (Pointee->isFunctionType())
-      return 3;
-    else
-      return 2;
-  } else if (RD->getNumBases() > 1 && Pointee->isFunctionType())
-    return 2;
-  return 1;
+  switch (Inheritance) {
+  case attr::SingleInheritance:
+    return 1;
+  case attr::MultipleInheritance:
+    return 1 + int(Pointee->isFunctionType());
+  case attr::VirtualInheritance:
+    return 2 + int(Pointee->isFunctionType());
+  default:
+    llvm_unreachable("unknown inheritance model");
+    return 0;
+  }
 }
 
 CXXABI *clang::CreateMicrosoftCXXABI(ASTContext &Ctx) {
