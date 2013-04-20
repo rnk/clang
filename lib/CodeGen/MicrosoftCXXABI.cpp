@@ -601,8 +601,11 @@ MicrosoftCXXABI::EmitMemberPointer(const CXXMethodDecl *MD) {
 
 llvm::Constant *
 MicrosoftCXXABI::EmitMemberPointer(const APValue &MP, QualType MPT) {
-  llvm_unreachable("const expr member pointer conversions not implemented in "
-                   "the MS ABI");
+  // FIXME: Implement the const expr side of this with all the proper
+  // conversions.
+  const CXXRecordDecl *RD = MPT->castAs<MemberPointerType>()->getClass()->getAsCXXRecordDecl();
+  return EmitFullMemberPointer(llvm::Constant::getNullValue(CGM.VoidPtrTy),
+                               /*IsMemberFunction=*/true, RD);
 }
 
 /// Member pointers are the same if they're either bitwise identical *or* both
