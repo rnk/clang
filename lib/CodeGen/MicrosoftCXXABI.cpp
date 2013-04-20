@@ -139,6 +139,12 @@ private:
                                  llvm::Value *VirtualBaseAdjustmentOffset,
                                  llvm::Value *VBPtrOffset /* optional */);
 
+  /// EmitFullMemberPointer - Emits a full member pointer with the fields common
+  /// data and function member pointers.
+  llvm::Constant *EmitFullMemberPointer(llvm::Constant *FirstField,
+                                        bool IsMemberFunction,
+                                        const CXXRecordDecl *RD);
+
 public:
   virtual llvm::Type *ConvertMemberPointerType(const MemberPointerType *MPT);
 
@@ -148,6 +154,8 @@ public:
 
   virtual llvm::Constant *EmitMemberDataPointer(const MemberPointerType *MPT,
                                                 CharUnits offset);
+  virtual llvm::Constant *EmitMemberPointer(const CXXMethodDecl *MD);
+  virtual llvm::Constant *EmitMemberPointer(const APValue &MP, QualType MPT);
 
   virtual llvm::Value *EmitMemberPointerComparison(CodeGenFunction &CGF,
                                                    llvm::Value *L,
@@ -427,10 +435,9 @@ static bool hasOnlyOneField(MSInheritanceModel Inheritance) {
 
 // Only member pointers to functions need a this adjustment, since it can be
 // combined with the field offset for data pointers.
-static bool hasNonVirtualBaseAdjustmentField(const MemberPointerType *MPT,
+static bool hasNonVirtualBaseAdjustmentField(bool IsMemberFunction,
                                              MSInheritanceModel Inheritance) {
-  return (MPT->isMemberFunctionPointer() &&
-          Inheritance >= MSIM_Multiple);
+  return (IsMemberFunction && Inheritance >= MSIM_Multiple);
 }
 
 static bool hasVirtualBaseAdjustmentField(MSInheritanceModel Inheritance) {
@@ -474,7 +481,8 @@ MicrosoftCXXABI::ConvertMemberPointerType(const MemberPointerType *MPT) {
 
   if (hasVBPtrOffsetField(Inheritance))
     fields.push_back(CGM.IntTy);
-  if (hasNonVirtualBaseAdjustmentField(MPT, Inheritance))
+  if (hasNonVirtualBaseAdjustmentField(MPT->isMemberFunctionPointer(),
+                                       Inheritance))
     fields.push_back(CGM.IntTy);
   if (hasVirtualBaseAdjustmentField(Inheritance))
     fields.push_back(CGM.IntTy);  // VirtualBaseAdjustmentOffset
@@ -502,7 +510,8 @@ GetNullMemberPointerFields(const MemberPointerType *MPT,
 
   if (hasVBPtrOffsetField(Inheritance))
     fields.push_back(getZeroInt());
-  if (hasNonVirtualBaseAdjustmentField(MPT, Inheritance))
+  if (hasNonVirtualBaseAdjustmentField(MPT->isMemberFunctionPointer(),
+                                       Inheritance))
     fields.push_back(getZeroInt());
   if (hasVirtualBaseAdjustmentField(Inheritance))
     fields.push_back(getAllOnesInt());
@@ -520,25 +529,80 @@ MicrosoftCXXABI::EmitNullMemberPointer(const MemberPointerType *MPT) {
 }
 
 llvm::Constant *
-MicrosoftCXXABI::EmitMemberDataPointer(const MemberPointerType *MPT,
-                                       CharUnits offset) {
-  const CXXRecordDecl *RD = MPT->getClass()->getAsCXXRecordDecl();
+MicrosoftCXXABI::EmitFullMemberPointer(llvm::Constant *FirstField,
+                                       bool IsMemberFunction,
+                                       const CXXRecordDecl *RD)
+{
   MSInheritanceModel Inheritance = RD->getMSInheritanceModel();
+
+  // Single inheritance class member pointer are represented as scalars instead
+  // of aggregates.
+  if (hasOnlyOneField(Inheritance))
+    return FirstField;
+
   llvm::SmallVector<llvm::Constant *, 4> fields;
-  fields.push_back(llvm::ConstantInt::get(CGM.IntTy, offset.getQuantity()));
+  fields.push_back(FirstField);
+
   if (hasVBPtrOffsetField(Inheritance)) {
     int64_t VBPtrOffset =
       getContext().getASTRecordLayout(RD).getVBPtrOffset().getQuantity();
     fields.push_back(llvm::ConstantInt::get(CGM.IntTy, VBPtrOffset));
   }
-  assert(!hasNonVirtualBaseAdjustmentField(MPT, Inheritance));
-  // The virtual base field starts out zero.  It is adjusted by conversions to
-  // member pointer types of a more derived class.  See http://llvm.org/PR15713
+
+  // The rest of the fields are adjusted by conversions to a more derived class.
+  if (hasNonVirtualBaseAdjustmentField(IsMemberFunction, Inheritance))
+    fields.push_back(getZeroInt());
   if (hasVirtualBaseAdjustmentField(Inheritance))
     fields.push_back(getZeroInt());
-  if (fields.size() == 1)
-    return fields[0];
+
   return llvm::ConstantStruct::getAnon(fields);
+}
+
+llvm::Constant *
+MicrosoftCXXABI::EmitMemberDataPointer(const MemberPointerType *MPT,
+                                       CharUnits offset) {
+  const CXXRecordDecl *RD = MPT->getClass()->getAsCXXRecordDecl();
+  llvm::Constant *FirstField =
+    llvm::ConstantInt::get(CGM.IntTy, offset.getQuantity());
+  return EmitFullMemberPointer(FirstField, /*IsMemberFunction=*/false, RD);
+}
+
+llvm::Constant *
+MicrosoftCXXABI::EmitMemberPointer(const CXXMethodDecl *MD) {
+  assert(MD->isInstance() && "Member function must not be static!");
+  MD = MD->getCanonicalDecl();
+  const CXXRecordDecl *RD = MD->getParent();
+  CodeGenTypes &Types = CGM.getTypes();
+
+  llvm::Constant *FirstField;
+  if (MD->isVirtual()) {
+    // FIXME: We have to instantiate a thunk that loads the vftable and jumps to
+    // the right offset.
+    FirstField = llvm::Constant::getNullValue(CGM.VoidPtrTy);
+  } else {
+    const FunctionProtoType *FPT = MD->getType()->castAs<FunctionProtoType>();
+    llvm::Type *Ty;
+    // Check whether the function has a computable LLVM signature.
+    if (Types.isFuncTypeConvertible(FPT)) {
+      // The function has a computable LLVM signature; use the correct type.
+      Ty = Types.GetFunctionType(Types.arrangeCXXMethodDeclaration(MD));
+    } else {
+      // Use an arbitrary non-function type to tell GetAddrOfFunction that the
+      // function type is incomplete.
+      Ty = CGM.PtrDiffTy;
+    }
+    FirstField = CGM.GetAddrOfFunction(MD, Ty);
+    FirstField = llvm::ConstantExpr::getBitCast(FirstField, CGM.VoidPtrTy);
+  }
+
+  // The rest of the fields are common with data member pointers.
+  return EmitFullMemberPointer(FirstField, /*IsMemberFunction=*/true, RD);
+}
+
+llvm::Constant *
+MicrosoftCXXABI::EmitMemberPointer(const APValue &MP, QualType MPT) {
+  llvm_unreachable("const expr member pointer conversions not implemented in "
+                   "the MS ABI");
 }
 
 /// Member pointers are the same if they're either bitwise identical *or* both
