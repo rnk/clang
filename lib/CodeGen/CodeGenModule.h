@@ -355,6 +355,9 @@ class CodeGenModule : public CodeGenTypeCache {
   /// \brief The complete set of modules that has been imported.
   llvm::SetVector<clang::Module *> ImportedModules;
 
+  /// \brief A vector of metadata strings.
+  SmallVector<llvm::Value *, 16> LinkerOptionsMetadata;
+
   /// @name Cache for Objective-C runtime types
   /// @{
 
@@ -906,6 +909,9 @@ public:
   void EmitTentativeDefinition(const VarDecl *D);
 
   void EmitVTable(CXXRecordDecl *Class, bool DefinitionRequired);
+
+  /// \brief Appends Opts to the "Linker Options" metadata value.
+  void AppendLinkerOptions(StringRef Opts);
 
   llvm::GlobalVariable::LinkageTypes
   getFunctionLinkage(const FunctionDecl *FD);

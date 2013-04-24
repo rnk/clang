@@ -186,7 +186,8 @@ void CodeGenModule::Release() {
   EmitStaticExternCAliases();
   EmitLLVMUsed();
 
-  if (CodeGenOpts.Autolink && Context.getLangOpts().Modules) {
+  if (CodeGenOpts.Autolink &&
+      (Context.getLangOpts().Modules || !LinkerOptionsMetadata.empty())) {
     EmitModuleLinkOptions();
   }
 
@@ -762,6 +763,11 @@ void CodeGenModule::EmitLLVMUsed() {
   GV->setSection("llvm.metadata");
 }
 
+void CodeGenModule::AppendLinkerOptions(StringRef Opts) {
+  llvm::Value *MDOpts = llvm::MDString::get(getLLVMContext(), Opts);
+  LinkerOptionsMetadata.push_back(llvm::MDNode::get(getLLVMContext(), MDOpts));
+}
+
 /// \brief Add link options implied by the given module, including modules
 /// it depends on, using a postorder walk.
 static void addLinkOptionsPostorder(llvm::LLVMContext &Context,
@@ -852,7 +858,8 @@ void CodeGenModule::EmitModuleLinkOptions() {
   }
 
   // Add link options for all of the imported modules in reverse topological
-  // order.
+  // order.  We don't do anything to try to order import link flags with respect
+  // to linker options inserted by things like #pragma comment().
   SmallVector<llvm::Value *, 16> MetadataArgs;
   Visited.clear();
   for (llvm::SetVector<clang::Module *>::iterator M = LinkModules.begin(),
@@ -862,10 +869,12 @@ void CodeGenModule::EmitModuleLinkOptions() {
       addLinkOptionsPostorder(getLLVMContext(), *M, MetadataArgs, Visited);
   }
   std::reverse(MetadataArgs.begin(), MetadataArgs.end());
+  LinkerOptionsMetadata.append(MetadataArgs.begin(), MetadataArgs.end());
 
   // Add the linker options metadata flag.
   getModule().addModuleFlag(llvm::Module::AppendUnique, "Linker Options",
-                            llvm::MDNode::get(getLLVMContext(), MetadataArgs));
+                            llvm::MDNode::get(getLLVMContext(),
+                                              LinkerOptionsMetadata));
 }
 
 void CodeGenModule::EmitDeferred() {

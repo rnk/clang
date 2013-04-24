@@ -115,6 +115,10 @@ namespace {
 
       Builder->EmitVTable(RD, DefinitionRequired);
     }
+
+    virtual void HandleLinkerOptionPragma(llvm::StringRef Opts) {
+      Builder->AppendLinkerOptions(Opts);
+    }
   };
 }
 

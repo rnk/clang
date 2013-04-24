@@ -70,6 +70,19 @@ void Parser::HandlePragmaMSStruct() {
   ConsumeToken(); // The annotation token.
 }
 
+void Parser::HandlePragmaMSComment() {
+  assert(Tok.is(tok::annot_pragma_mscomment));
+  PragmaMSCommentKind Kind =
+    static_cast<PragmaMSCommentKind>(
+    reinterpret_cast<uintptr_t>(Tok.getAnnotationValue()));
+  ConsumeToken();
+
+  assert(Tok.is(tok::string_literal));
+  StringRef Arg(Tok.getLiteralData(), Tok.getLength());
+  Actions.ActOnPragmaMSComment(Kind, Arg);
+  ConsumeStringToken();
+}
+
 void Parser::HandlePragmaAlign() {
   assert(Tok.is(tok::annot_pragma_align));
   Sema::PragmaOptionsAlignKind Kind =

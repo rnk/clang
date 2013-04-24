@@ -14,6 +14,7 @@
 
 #include "clang/Lex/Pragma.h"
 #include "clang/Basic/FileManager.h"
+#include "clang/Basic/PragmaKinds.h"
 #include "clang/Basic/SourceManager.h"
 #include "clang/Lex/HeaderSearch.h"
 #include "clang/Lex/LexDiagnostic.h"
@@ -22,6 +23,7 @@
 #include "clang/Lex/Preprocessor.h"
 #include "llvm/Support/CrashRecoveryContext.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/ADT/StringSwitch.h"
 #include <algorithm>
 using namespace clang;
 
@@ -517,10 +519,16 @@ void Preprocessor::HandlePragmaComment(Token &Tok) {
   }
 
   // Verify that this is one of the 5 whitelisted options.
-  // FIXME: warn that 'exestr' is deprecated.
-  const IdentifierInfo *II = Tok.getIdentifierInfo();
-  if (!II->isStr("compiler") && !II->isStr("exestr") && !II->isStr("lib") &&
-      !II->isStr("linker") && !II->isStr("user")) {
+  IdentifierInfo *II = Tok.getIdentifierInfo();
+  PragmaMSCommentKind Kind =
+    llvm::StringSwitch<PragmaMSCommentKind>(II->getName())
+    .Case("linker",   PCK_Linker)
+    .Case("lib",      PCK_Lib)
+    .Case("compiler", PCK_Compiler)
+    .Case("exestr",   PCK_ExeStr)
+    .Case("user",     PCK_User)
+    .Default(PCK_Unknown);
+  if (Kind == PCK_Unknown) {
     Diag(Tok.getLocation(), diag::err_pragma_comment_unknown_kind);
     return;
   }
@@ -533,11 +541,12 @@ void Preprocessor::HandlePragmaComment(Token &Tok) {
                                               /*MacroExpansion=*/true))
     return;
 
+  // FIXME: warn that 'exestr' is deprecated.
   // FIXME: If the kind is "compiler" warn if the string is present (it is
   // ignored).
-  // FIXME: 'lib' requires a comment string.
-  // FIXME: 'linker' requires a comment string, and has a specific list of
-  // things that are allowable.
+  // The MSDN docs say that "lib" and "linker" require a string and have a short
+  // whitelist of linker options they support, but in practice MSVC doesn't
+  // issue a diagnostic.  Therefore neither does clang.
 
   if (Tok.isNot(tok::r_paren)) {
     Diag(Tok.getLocation(), diag::err_pragma_comment_malformed);
@@ -553,6 +562,26 @@ void Preprocessor::HandlePragmaComment(Token &Tok) {
   // If the pragma is lexically sound, notify any interested PPCallbacks.
   if (Callbacks)
     Callbacks->PragmaComment(CommentLoc, II, ArgumentString);
+
+  Token *Toks = BP.Allocate<Token>(2);
+
+  // Inject a pragma annotation.
+  new (&Toks[0]) Token();
+  Toks[0].startToken();
+  Toks[0].setKind(tok::annot_pragma_mscomment);
+  Toks[0].setLocation(CommentLoc);
+  Toks[0].setAnnotationValue(reinterpret_cast<void*>(static_cast<uintptr_t>(Kind)));
+
+  // Inject the argument token back into the stream.
+  // FIXME: Is there a better way to forward the string literal on to the
+  // parser?
+  new (&Toks[1]) Token();
+  Toks[1].startToken();
+  Toks[1].setKind(tok::string_literal);
+  CreateString(ArgumentString, Toks[1]);
+
+  EnterTokenStream(Toks, 2, /*DisableMacroExpansion=*/true,
+                   /*OwnsTokens=*/false);
 }
 
 /// ParsePragmaPushOrPopMacro - Handle parsing of pragma push_macro/pop_macro.  
