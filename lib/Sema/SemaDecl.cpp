@@ -5877,6 +5877,17 @@ void Sema::checkVoidParamDecl(ParmVarDecl *Param) {
   }
 }
 
+bool Sema::AdjustParameterTypes(SmallVectorImpl<QualType> &AdjustedParms,
+                                ArrayRef<QualType> TSIParms) {
+  bool NeedsAdjustment = false;
+  for (ArrayRef<QualType>::iterator I = TSIParms.begin(), E = TSIParms.end();
+       I != E; ++I) {
+    AdjustedParms.push_back(Context.getAdjustedParameterType(*I));
+    NeedsAdjustment |= AdjustedParms.back() != *I;
+  }
+  return NeedsAdjustment;
+}
+
 NamedDecl*
 Sema::ActOnFunctionDeclarator(Scope *S, Declarator &D, DeclContext *DC,
                               TypeSourceInfo *TInfo, LookupResult &Previous,
@@ -5911,14 +5922,8 @@ Sema::ActOnFunctionDeclarator(Scope *S, Declarator &D, DeclContext *DC,
   // Adjust parameter types from the type as written.
   SmallVector<QualType, 16> AdjustedParms;
   const FunctionProtoType *FPT = dyn_cast<FunctionProtoType>(FT);
-  if (FPT) {
-    for (FunctionProtoType::arg_type_iterator I = FPT->arg_type_begin(),
-         E = FPT->arg_type_end(); I != E; ++I) {
-      AdjustedParms.push_back(Context.getAdjustedParameterType(*I));
-      if (AdjustedParms.back() != *I)
-        NeedsAdjustment = true;
-    }
-  }
+  if (FPT)
+    NeedsAdjustment = AdjustParameterTypes(AdjustedParms, FPT->getArgTypes());
 
   // Skip the type recreation if it isn't needed, for performance and to avoid
   // prematurely desugaring things like typedefs and __typeofs.

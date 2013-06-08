@@ -1442,6 +1442,12 @@ public:
   bool AddOverriddenMethods(CXXRecordDecl *DC, CXXMethodDecl *MD);
   void checkVoidParamDecl(ParmVarDecl *Param);
 
+  /// Adjusts function parameter types.  Returns true if any adjustment was
+  /// necessary.  Always fills AdjustedParms, even if no adjustment was
+  /// necessary.
+  bool AdjustParameterTypes(SmallVectorImpl<QualType> &AdjustedParms,
+                            ArrayRef<QualType> TSIParms);
+
   bool CheckConstexprFunctionDecl(const FunctionDecl *FD);
   bool CheckConstexprFunctionBody(const FunctionDecl *FD, Stmt *Body);
 

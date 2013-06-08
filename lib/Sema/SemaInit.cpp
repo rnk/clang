@@ -4407,8 +4407,10 @@ InitializationSequence::InitializationSequence(Sema &S,
       SetFailed(FK_ArrayNeedsInitListOrStringLiteral);
     else if (IsWideCharCompatible(DestAT->getElementType(), Context))
       SetFailed(FK_ArrayNeedsInitListOrWideStringLiteral);
-    else
+    else {
+      llvm_unreachable("FK_ArrayNeedsInitList");
       SetFailed(FK_ArrayNeedsInitList);
+    }
 
     return;
   }

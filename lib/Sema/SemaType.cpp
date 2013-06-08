@@ -2468,6 +2468,8 @@ static TypeSourceInfo *GetFullTypeForDeclarator(TypeProcessingState &state,
     }
   }
 
+  llvm::errs() << "GetFullTypeForDeclarator\n";
+
   // Walk the DeclTypeInfo, building the recursive type as we go.
   // DeclTypeInfos are ordered from the identifier out, which is
   // opposite of what we want :).
@@ -2475,6 +2477,7 @@ static TypeSourceInfo *GetFullTypeForDeclarator(TypeProcessingState &state,
     unsigned chunkIndex = e - i - 1;
     state.setCurrentChunkIndex(chunkIndex);
     DeclaratorChunk &DeclType = D.getTypeObject(chunkIndex);
+    llvm::errs() << "DeclType.Kind " << DeclType.Kind << '\n';
     if (IsQualifiedFunction) {
       checkQualifiedFunction(S, T, DeclType);
       IsQualifiedFunction = DeclType.Kind == DeclaratorChunk::Paren;
@@ -2489,6 +2492,7 @@ static TypeSourceInfo *GetFullTypeForDeclarator(TypeProcessingState &state,
         S.Diag(DeclType.Loc, diag::err_blocks_disable);
 
       T = S.BuildBlockPointerType(T, D.getIdentifierLoc(), Name);
+      T.dump("BuildBlockPointerType");
       if (DeclType.Cls.TypeQuals)
         T = S.BuildQualifiedType(T, DeclType.Loc, DeclType.Cls.TypeQuals);
       break;
@@ -2610,6 +2614,7 @@ static TypeSourceInfo *GetFullTypeForDeclarator(TypeProcessingState &state,
       break;
     }
     case DeclaratorChunk::Function: {
+      T.dump("DeclaratorChunk::Function");
       // If the function declarator has a prototype (i.e. it is not () and
       // does not have a K&R-style identifier list), then the arguments are part
       // of the type, otherwise the argument list is ().

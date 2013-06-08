@@ -3951,6 +3951,12 @@ bool Sema::GatherArgumentsForCall(SourceLocation CallLoc,
           (!Param || !Param->hasAttr<CFConsumedAttr>()))
         Arg = stripARCUnbridgedCast(Arg);
 
+      ProtoArgType.dump("ProtoArgType");
+      if (Param) {
+        Param->getType().dump("Param");
+      } else {
+        llvm::errs() << "no param?\n";
+      }
       InitializedEntity Entity = Param ?
           InitializedEntity::InitializeParameter(Context, Param, ProtoArgType)
         : InitializedEntity::InitializeParameter(Context, ProtoArgType,
@@ -4342,7 +4348,9 @@ Sema::BuildResolvedCallExpr(Expr *Fn, NamedDecl *NDecl,
                          << Fn->getType() << Fn->getSourceRange());
   } else if (const BlockPointerType *BPT =
                Fn->getType()->getAs<BlockPointerType>()) {
+    llvm::errs() << "BlockPointerType\n";
     FuncT = BPT->getPointeeType()->castAs<FunctionType>();
+    FuncT->dump();
   } else {
     // Handle calls to expressions of unknown-any type.
     if (Fn->getType() == Context.UnknownAnyTy) {
@@ -9845,12 +9853,24 @@ void Sema::ActOnBlockArguments(SourceLocation CaretLoc, Declarator &ParamInfo,
     T = Context.getFunctionType(Context.DependentTy, None, EPI);
     Sig = Context.getTrivialTypeSourceInfo(T);
   }
-  
+
   // GetTypeForDeclarator always produces a function type for a block
   // literal signature.  Furthermore, it is always a FunctionProtoType
   // unless the function was written with a typedef.
   assert(T->isFunctionType() &&
          "GetTypeForDeclarator made a non-function block signature");
+
+#if 1
+  // The TypeSourceInfo can have types like arrays that need to be adjusted.
+  if (const FunctionProtoType *FPT = dyn_cast<FunctionProtoType>(T)) {
+    SmallVector<QualType, 8> AdjustedParms;
+    bool NeedsAdjustment =
+      AdjustParameterTypes(AdjustedParms, FPT->getArgTypes());
+    if (NeedsAdjustment)
+      T = Context.getFunctionType(FPT->getResultType(), AdjustedParms,
+                                  FPT->getExtProtoInfo());
+  }
+#endif
 
   // Look for an explicit signature in that function type.
   FunctionProtoTypeLoc ExplicitSignature;
@@ -9906,6 +9926,7 @@ void Sema::ActOnBlockArguments(SourceLocation CaretLoc, Declarator &ParamInfo,
   if (ExplicitSignature) {
     for (unsigned I = 0, E = ExplicitSignature.getNumArgs(); I != E; ++I) {
       ParmVarDecl *Param = ExplicitSignature.getArg(I);
+      Param->getType().dump("Param");
       if (Param->getIdentifier() == 0 &&
           !Param->isImplicit() &&
           !Param->isInvalidDecl() &&
@@ -10025,17 +10046,22 @@ ExprResult Sema::ActOnBlockStmtExpr(SourceLocation CaretLoc,
 
     // Otherwise, if we don't need to change anything about the function type,
     // preserve its sugar structure.
-    } else if (FTy->getResultType() == RetTy &&
-               (!NoReturn || FTy->getNoReturnAttr())) {
-      BlockTy = BSI->FunctionType;
-
-    // Otherwise, make the minimal modifications to the function type.
     } else {
       const FunctionProtoType *FPT = cast<FunctionProtoType>(FTy);
-      FunctionProtoType::ExtProtoInfo EPI = FPT->getExtProtoInfo();
-      EPI.TypeQuals = 0; // FIXME: silently?
-      EPI.ExtInfo = Ext;
-      BlockTy = Context.getFunctionType(RetTy, FPT->getArgTypes(), EPI);
+      SmallVector<QualType, 8> AdjustedParms;
+      bool NeedsAdjustment =
+        AdjustParameterTypes(AdjustedParms, FPT->getArgTypes());
+      NeedsAdjustment |= (FTy->getResultType() == RetTy &&
+                          (!NoReturn || FTy->getNoReturnAttr()));
+      if (NeedsAdjustment) {
+        // Otherwise, make the minimal modifications to the function type.
+        FunctionProtoType::ExtProtoInfo EPI = FPT->getExtProtoInfo();
+        EPI.TypeQuals = 0; // FIXME: silently?
+        EPI.ExtInfo = Ext;
+        BlockTy = Context.getFunctionType(RetTy, AdjustedParms, EPI);
+      } else {
+        BlockTy = BSI->FunctionType;
+      }
     }
 
   // If we don't have a function type, just build one from nothing.
@@ -10044,6 +10070,8 @@ ExprResult Sema::ActOnBlockStmtExpr(SourceLocation CaretLoc,
     EPI.ExtInfo = FunctionType::ExtInfo().withNoReturn(NoReturn);
     BlockTy = Context.getFunctionType(RetTy, None, EPI);
   }
+
+  BlockTy.dump("BlockTy");
 
   DiagnoseUnusedParameters(BSI->TheDecl->param_begin(),
                            BSI->TheDecl->param_end());

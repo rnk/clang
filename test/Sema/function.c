@@ -103,3 +103,8 @@ int func_e(int x) {
   }
   return x + 3;
 }
+
+void t22(void (*take_array(int array[1]))) {
+  int arr[1];
+  take_array(arr);
+}

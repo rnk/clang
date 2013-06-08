@@ -51,8 +51,8 @@ struct tag {
   int x;
 };
 typedef struct tag array_ty[1];
-void test6(void) {
-  void (^block)(array_ty) = ^(array_ty arr) { };
+void test6(void (^block)(array_ty)) {
+   //= ^(array_ty arr) { };
   array_ty arr;
   block(arr);
 }
