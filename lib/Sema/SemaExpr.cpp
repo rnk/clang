@@ -3929,6 +3929,8 @@ bool Sema::GatherArgumentsForCall(SourceLocation CallLoc,
   // Continue to check argument types (even if we have too few/many args).
   for (unsigned i = FirstProtoArg; i != NumArgsToCheck; i++) {
     QualType ProtoArgType = Proto->getArgType(i);
+    // FIXME: Necessary?
+    //ProtoArgType = Context.getAdjustedParameterType(ProtoArgType);
 
     Expr *Arg;
     ParmVarDecl *Param;
