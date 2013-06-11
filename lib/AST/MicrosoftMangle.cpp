@@ -87,8 +87,7 @@ public:
   void mangleVariableEncoding(const VarDecl *VD);
   void mangleNumber(int64_t Number);
   void mangleNumber(const llvm::APSInt &Value);
-  void mangleType(QualType T, SourceRange Range,
-                  QualifierMangleMode QMM = QMM_Mangle);
+  void mangleType(TypeLoc TL, QualifierMangleMode QMM = QMM_Mangle);
 
 private:
   void disableBackReferences() { UseNameBackReferences = false; }
@@ -109,23 +108,22 @@ private:
   void mangleObjCMethodName(const ObjCMethodDecl *MD);
   void mangleLocalName(const FunctionDecl *FD);
 
-  void mangleArgumentType(QualType T, SourceRange Range);
+  void mangleArgumentType(TypeLoc TL);
 
   // Declare manglers for every type class.
 #define ABSTRACT_TYPE(CLASS, PARENT)
 #define NON_CANONICAL_TYPE(CLASS, PARENT)
-#define TYPE(CLASS, PARENT) void mangleType(const CLASS##Type *T, \
-                                            SourceRange Range);
+#define TYPE(CLASS, PARENT) void mangleType(CLASS##TypeLoc TL);
 #include "clang/AST/TypeNodes.def"
 #undef ABSTRACT_TYPE
 #undef NON_CANONICAL_TYPE
 #undef TYPE
   
-  void mangleType(const TagType*);
-  void mangleFunctionType(const FunctionType *T, const FunctionDecl *D,
+  void mangleType(TagTypeLoc TL);
+  void mangleFunctionType(FunctionTypeLoc TL, const FunctionDecl *D,
                           bool IsStructor, bool IsInstMethod);
-  void mangleDecayedArrayType(const ArrayType *T, bool IsGlobal);
-  void mangleArrayType(const ArrayType *T);
+  void mangleDecayedArrayType(ArrayTypeLoc TL, bool IsGlobal);
+  void mangleArrayType(ArrayTypeLoc TL);
   void mangleFunctionClass(const FunctionDecl *FD);
   void mangleCallingConvention(const FunctionType *T, bool IsInstMethod = false);
   void mangleIntegerLiteral(const llvm::APSInt &Number, bool IsBoolean);
@@ -265,9 +263,9 @@ void MicrosoftCXXNameMangler::mangleFunctionEncoding(const FunctionDecl *FD) {
   
   // We should never ever see a FunctionNoProtoType at this point.
   // We don't even know how to mangle their types anyway :).
-  TypeSourceInfo *TSI = FD->getTypeSourceInfo();
-  QualType T = TSI ? TSI->getType() : FD->getType();
-  const FunctionProtoType *FT = T->castAs<FunctionProtoType>();
+  // FIXME: TSI can be NULL!
+  TypeLoc TL = FD->getTypeSourceInfo()->getTypeLoc();
+  FunctionProtoTypeLoc FTL = TL.castAs<FunctionProtoTypeLoc>();
 
   bool InStructor = false, InInstMethod = false;
   const CXXMethodDecl *MD = dyn_cast<CXXMethodDecl>(FD);
@@ -281,7 +279,7 @@ void MicrosoftCXXNameMangler::mangleFunctionEncoding(const FunctionDecl *FD) {
   // First, the function class.
   mangleFunctionClass(FD);
 
-  mangleFunctionType(FT, FD, InStructor, InInstMethod);
+  mangleFunctionType(FTL, NULL, InStructor, InInstMethod);
 }
 
 void MicrosoftCXXNameMangler::mangleVariableEncoding(const VarDecl *VD) {
@@ -314,17 +312,20 @@ void MicrosoftCXXNameMangler::mangleVariableEncoding(const VarDecl *VD) {
   TypeLoc TL = VD->getTypeSourceInfo()->getTypeLoc();
   QualType Ty = TL.getType();
   if (Ty->isPointerType() || Ty->isReferenceType()) {
-    mangleType(Ty, TL.getSourceRange(), QMM_Drop);
+    mangleType(TL, QMM_Drop);
     mangleQualifiers(Ty->getPointeeType().getQualifiers(), false);
-  } else if (const ArrayType *AT = getASTContext().getAsArrayType(Ty)) {
+  } else if (Ty->isArrayType()) {
     // Global arrays are funny, too.
-    mangleDecayedArrayType(AT, true);
-    if (AT->getElementType()->isArrayType())
+    // FIXME: Qualifiers?  There are warnings about using castAs with
+    // ArrayType, what about ArrayTypeLoc?
+    ArrayTypeLoc ATL = TL.castAs<ArrayTypeLoc>();
+    mangleDecayedArrayType(ATL, true);
+    if (ATL.getTypePtr()->getElementType()->isArrayType())
       Out << 'A';
     else
       mangleQualifiers(Ty.getQualifiers(), false);
   } else {
-    mangleType(Ty, TL.getSourceRange(), QMM_Drop);
+    mangleType(TL, QMM_Drop);
     mangleQualifiers(Ty.getLocalQualifiers(), false);
   }
 }
@@ -849,8 +850,11 @@ MicrosoftCXXNameMangler::mangleTemplateArgs(const TemplateDecl *TD,
     case TemplateArgument::Null:
       llvm_unreachable("Can't mangle null template arguments!");
     case TemplateArgument::Type: {
+      // FIXME: How do we get at the TypeLoc of a template argument?  They are
+      // often inferred?
       QualType T = TA.getAsType();
-      mangleType(T, SourceRange(), QMM_Escape);
+      TypeLoc TL(T, 0);
+      mangleType(TL, QMM_Escape);
       break;
     }
     case TemplateArgument::Declaration:
@@ -982,8 +986,8 @@ void MicrosoftCXXNameMangler::manglePointerQualifiers(Qualifiers Quals) {
   }
 }
 
-void MicrosoftCXXNameMangler::mangleArgumentType(QualType T,
-                                                 SourceRange Range) {
+void MicrosoftCXXNameMangler::mangleArgumentType(TypeLoc TL) {
+  QualType T = TL.getType();
   // MSVC will backreference two canonically equivalent types that have slightly
   // different manglings when mangled alone.
   void *TypePtr = getASTContext().getCanonicalType(T).getAsOpaquePtr();
@@ -992,13 +996,15 @@ void MicrosoftCXXNameMangler::mangleArgumentType(QualType T,
   if (Found == TypeBackReferences.end()) {
     size_t OutSizeBefore = Out.GetNumBytesInBuffer();
 
-    if (const ArrayType *AT = getASTContext().getAsArrayType(T)) {
-      mangleDecayedArrayType(AT, false);
-    } else if (const FunctionType *FT = T->getAs<FunctionType>()) {
+    if (TL.getType()->isArrayType()) {
+      // FIXME: Qualifiers?  There are warnings about using castAs with
+      // ArrayType, what about ArrayTypeLoc?
+      mangleDecayedArrayType(TL.castAs<ArrayTypeLoc>(), false);
+    } else if (FunctionTypeLoc FTL = TL.getAs<FunctionTypeLoc>()) {
       Out << "P6";
-      mangleFunctionType(FT, 0, false, false);
+      mangleFunctionType(FTL, 0, false, false);
     } else {
-      mangleType(T, Range, QMM_Drop);
+      mangleType(TL, QMM_Drop);
     }
 
     // See if it's worth creating a back reference.
@@ -1014,20 +1020,23 @@ void MicrosoftCXXNameMangler::mangleArgumentType(QualType T,
   }
 }
 
-void MicrosoftCXXNameMangler::mangleType(QualType T, SourceRange Range,
-                                         QualifierMangleMode QMM) {
+void MicrosoftCXXNameMangler::mangleType(TypeLoc TL, QualifierMangleMode QMM) {
+  QualType T = TL.getType();
   // Don't use the canonical types.  MSVC includes things like 'const' on
   // pointer arguments to function pointers that canonicalization strips away.
   T = T.getDesugaredType(getASTContext());
   Qualifiers Quals = T.getLocalQualifiers();
-  if (const ArrayType *AT = getASTContext().getAsArrayType(T)) {
+  if (TL.getType()->isArrayType()) {
     // If there were any Quals, getAsArrayType() pushed them onto the array
     // element type.
+    // FIXME: Comment is innacurate now
     if (QMM == QMM_Mangle)
       Out << 'A';
     else if (QMM == QMM_Escape || QMM == QMM_Result)
       Out << "$$B";
-    mangleArrayType(AT);
+    // FIXME: Qualifiers?  There are warnings about using castAs with
+    // ArrayType, what about ArrayTypeLoc?
+    mangleArrayType(TL.castAs<ArrayTypeLoc>());
     return;
   }
 
@@ -1038,9 +1047,9 @@ void MicrosoftCXXNameMangler::mangleType(QualType T, SourceRange Range,
   case QMM_Drop:
     break;
   case QMM_Mangle:
-    if (const FunctionType *FT = dyn_cast<FunctionType>(T)) {
+    if (FunctionTypeLoc FTL = TL.getAs<FunctionTypeLoc>()) {
       Out << '6';
-      mangleFunctionType(FT, 0, false, false);
+      mangleFunctionType(FTL, 0, false, false);
       return;
     }
     mangleQualifiers(Quals, false);
@@ -1062,9 +1071,8 @@ void MicrosoftCXXNameMangler::mangleType(QualType T, SourceRange Range,
   // We have to mangle these now, while we still have enough information.
   if (IsPointer)
     manglePointerQualifiers(Quals);
-  const Type *ty = T.getTypePtr();
 
-  switch (ty->getTypeClass()) {
+  switch (TL.getTypeLocClass()) {
 #define ABSTRACT_TYPE(CLASS, PARENT)
 #define NON_CANONICAL_TYPE(CLASS, PARENT) \
   case Type::CLASS: \
@@ -1072,7 +1080,7 @@ void MicrosoftCXXNameMangler::mangleType(QualType T, SourceRange Range,
     return;
 #define TYPE(CLASS, PARENT) \
   case Type::CLASS: \
-    mangleType(cast<CLASS##Type>(ty), Range); \
+    mangleType(TL.castAs<CLASS##TypeLoc>()); \
     break;
 #include "clang/AST/TypeNodes.def"
 #undef ABSTRACT_TYPE
@@ -1081,8 +1089,7 @@ void MicrosoftCXXNameMangler::mangleType(QualType T, SourceRange Range,
   }
 }
 
-void MicrosoftCXXNameMangler::mangleType(const BuiltinType *T,
-                                         SourceRange Range) {
+void MicrosoftCXXNameMangler::mangleType(BuiltinTypeLoc TL) {
   //  <type>         ::= <builtin-type>
   //  <builtin-type> ::= X  # void
   //                 ::= C  # signed char
@@ -1107,6 +1114,7 @@ void MicrosoftCXXNameMangler::mangleType(const BuiltinType *T,
   //                 ::= _T # __float80 (Intel)
   //                 ::= _W # wchar_t
   //                 ::= _Z # __float80 (Digital Mars)
+  const BuiltinType *T = TL.getTypePtr();
   switch (T->getKind()) {
   case BuiltinType::Void: Out << 'X'; break;
   case BuiltinType::SChar: Out << 'C'; break;
@@ -1158,38 +1166,33 @@ void MicrosoftCXXNameMangler::mangleType(const BuiltinType *T,
     DiagnosticsEngine &Diags = Context.getDiags();
     unsigned DiagID = Diags.getCustomDiagID(DiagnosticsEngine::Error,
       "cannot mangle this built-in %0 type yet");
-    Diags.Report(Range.getBegin(), DiagID)
-      << T->getName(Context.getASTContext().getPrintingPolicy())
-      << Range;
+    Diags.Report(TL.getBeginLoc(), DiagID)
+      << T->getName(Context.getASTContext().getPrintingPolicy());
     break;
   }
   }
 }
 
 // <type>          ::= <function-type>
-void MicrosoftCXXNameMangler::mangleType(const FunctionProtoType *T,
-                                         SourceRange) {
+void MicrosoftCXXNameMangler::mangleType(FunctionProtoTypeLoc TL) {
   // Structors only appear in decls, so at this point we know it's not a
   // structor type.
   // FIXME: This may not be lambda-friendly.
   Out << "$$A6";
-  mangleFunctionType(T, NULL, false, false);
+  mangleFunctionType(TL, 0, false, false);
 }
-void MicrosoftCXXNameMangler::mangleType(const FunctionNoProtoType *T,
-                                         SourceRange) {
+void MicrosoftCXXNameMangler::mangleType(FunctionNoProtoTypeLoc TL) {
   llvm_unreachable("Can't mangle K&R function prototypes");
 }
 
-void MicrosoftCXXNameMangler::mangleFunctionType(const FunctionType *T,
+void MicrosoftCXXNameMangler::mangleFunctionType(FunctionTypeLoc TL,
                                                  const FunctionDecl *D,
                                                  bool IsStructor,
                                                  bool IsInstMethod) {
   // <function-type> ::= <this-cvr-qualifiers> <calling-convention>
   //                     <return-type> <argument-list> <throw-spec>
+  const FunctionType *T = TL.getTypePtr();
   const FunctionProtoType *Proto = cast<FunctionProtoType>(T);
-
-  SourceRange Range;
-  if (D) Range = D->getSourceRange();
 
   // If this is a C++ instance method, mangle the CVR qualifiers for the
   // this pointer.
@@ -1212,7 +1215,7 @@ void MicrosoftCXXNameMangler::mangleFunctionType(const FunctionType *T,
     }
     Out << '@';
   } else {
-    mangleType(Proto->getResultType(), Range, QMM_Result);
+    mangleType(TL.getResultLoc(), QMM_Result);
   }
 
   // <argument-list> ::= X # void
@@ -1221,11 +1224,16 @@ void MicrosoftCXXNameMangler::mangleFunctionType(const FunctionType *T,
   if (Proto->getNumArgs() == 0 && !Proto->isVariadic()) {
     Out << 'X';
   } else {
-    // Happens for function pointer type arguments for example.
-    for (FunctionProtoType::arg_type_iterator Arg = Proto->arg_type_begin(),
-         ArgEnd = Proto->arg_type_end();
-         Arg != ArgEnd; ++Arg)
-      mangleArgumentType(*Arg, Range);
+    for (unsigned I = 0, E = TL.getNumArgs(); I != E; ++I) {
+      TypeSourceInfo *TSI = TL.getArg(I)->getTypeSourceInfo();
+      if (TSI)
+        TSI->getType().dump("ParamType");
+      TypeLoc PTL = (TSI ? TSI->getTypeLoc() :
+                     TypeLoc(TL.getArg(I)->getType(), 0));
+      if (PTL)
+        PTL.getType().dump("PTL");
+      mangleArgumentType(PTL);
+    }
     // <builtin-type>      ::= Z  # ellipsis
     if (Proto->isVariadic())
       Out << 'Z';
@@ -1349,15 +1357,13 @@ void MicrosoftCXXNameMangler::mangleThrowSpecification(
   Out << 'Z';
 }
 
-void MicrosoftCXXNameMangler::mangleType(const UnresolvedUsingType *T,
-                                         SourceRange Range) {
+void MicrosoftCXXNameMangler::mangleType(UnresolvedUsingTypeLoc TL) {
   // Probably should be mangled as a template instantiation; need to see what
   // VC does first.
   DiagnosticsEngine &Diags = Context.getDiags();
   unsigned DiagID = Diags.getCustomDiagID(DiagnosticsEngine::Error,
     "cannot mangle this unresolved dependent type yet");
-  Diags.Report(Range.getBegin(), DiagID)
-    << Range;
+  Diags.Report(TL.getBeginLoc(), DiagID) << TL.getSourceRange();
 }
 
 // <type>        ::= <union-type> | <struct-type> | <class-type> | <enum-type>
@@ -1365,13 +1371,14 @@ void MicrosoftCXXNameMangler::mangleType(const UnresolvedUsingType *T,
 // <struct-type> ::= U <name>
 // <class-type>  ::= V <name>
 // <enum-type>   ::= W <size> <name>
-void MicrosoftCXXNameMangler::mangleType(const EnumType *T, SourceRange) {
-  mangleType(cast<TagType>(T));
+void MicrosoftCXXNameMangler::mangleType(EnumTypeLoc TL) {
+  mangleType(TL.castAs<TagTypeLoc>());
 }
-void MicrosoftCXXNameMangler::mangleType(const RecordType *T, SourceRange) {
-  mangleType(cast<TagType>(T));
+void MicrosoftCXXNameMangler::mangleType(RecordTypeLoc TL) {
+  mangleType(TL.castAs<TagTypeLoc>());
 }
-void MicrosoftCXXNameMangler::mangleType(const TagType *T) {
+void MicrosoftCXXNameMangler::mangleType(TagTypeLoc TL) {
+  const TagType *T = TL.getTypePtr();
   switch (T->getDecl()->getTagKind()) {
     case TTK_Union:
       Out << 'T';
@@ -1401,36 +1408,33 @@ void MicrosoftCXXNameMangler::mangleType(const TagType *T) {
 // It's supposed to be the other way around, but for some strange reason, it
 // isn't. Today this behavior is retained for the sole purpose of backwards
 // compatibility.
-void MicrosoftCXXNameMangler::mangleDecayedArrayType(const ArrayType *T,
+void MicrosoftCXXNameMangler::mangleDecayedArrayType(ArrayTypeLoc TL,
                                                      bool IsGlobal) {
   // This isn't a recursive mangling, so now we have to do it all in this
   // one call.
   if (IsGlobal) {
-    manglePointerQualifiers(T->getElementType().getQualifiers());
+    manglePointerQualifiers(TL.getType().getQualifiers());
   } else {
     Out << 'Q';
     if (PointersAre64Bit)
       Out << 'E';
   }
-  mangleType(T->getElementType(), SourceRange());
+  mangleType(TL.getElementLoc());
 }
-void MicrosoftCXXNameMangler::mangleType(const ConstantArrayType *T,
-                                         SourceRange) {
+void MicrosoftCXXNameMangler::mangleType(ConstantArrayTypeLoc TL) {
   llvm_unreachable("Should have been special cased");
 }
-void MicrosoftCXXNameMangler::mangleType(const VariableArrayType *T,
-                                         SourceRange) {
+void MicrosoftCXXNameMangler::mangleType(VariableArrayTypeLoc TL) {
   llvm_unreachable("Should have been special cased");
 }
-void MicrosoftCXXNameMangler::mangleType(const DependentSizedArrayType *T,
-                                         SourceRange) {
+void MicrosoftCXXNameMangler::mangleType(DependentSizedArrayTypeLoc TL) {
   llvm_unreachable("Should have been special cased");
 }
-void MicrosoftCXXNameMangler::mangleType(const IncompleteArrayType *T,
-                                         SourceRange) {
+void MicrosoftCXXNameMangler::mangleType(IncompleteArrayTypeLoc TL) {
   llvm_unreachable("Should have been special cased");
 }
-void MicrosoftCXXNameMangler::mangleArrayType(const ArrayType *T) {
+void MicrosoftCXXNameMangler::mangleArrayType(ArrayTypeLoc TL) {
+  const ArrayType *T = TL.getTypePtr();
   QualType ElementTy(T, 0);
   SmallVector<llvm::APInt, 3> Dimensions;
   for (;;) {
@@ -1469,95 +1473,90 @@ void MicrosoftCXXNameMangler::mangleArrayType(const ArrayType *T) {
   mangleNumber(Dimensions.size());
   for (unsigned Dim = 0; Dim < Dimensions.size(); ++Dim)
     mangleNumber(Dimensions[Dim].getLimitedValue());
-  mangleType(ElementTy, SourceRange(), QMM_Escape);
+  // FIXME: What about arrays of function pointers of decayed types?  :(
+  TypeLoc ETL(ElementTy, 0);
+  mangleType(ETL, QMM_Escape);
 }
 
 // <type>                   ::= <pointer-to-member-type>
 // <pointer-to-member-type> ::= <pointer-cvr-qualifiers> <cvr-qualifiers>
 //                                                          <class name> <type>
-void MicrosoftCXXNameMangler::mangleType(const MemberPointerType *T,
-                                         SourceRange Range) {
+void MicrosoftCXXNameMangler::mangleType(MemberPointerTypeLoc TL) {
+  const MemberPointerType *T = TL.getTypePtr();
   QualType PointeeType = T->getPointeeType();
-  if (const FunctionProtoType *FPT = PointeeType->getAs<FunctionProtoType>()) {
+  if (PointeeType->isFunctionType()) {
     Out << '8';
     mangleName(T->getClass()->castAs<RecordType>()->getDecl());
-    mangleFunctionType(FPT, NULL, false, true);
+    mangleFunctionType(TL.getPointeeLoc().castAs<FunctionTypeLoc>(), 0, false,
+                       true);
   } else {
     mangleQualifiers(PointeeType.getQualifiers(), true);
     mangleName(T->getClass()->castAs<RecordType>()->getDecl());
-    mangleType(PointeeType, Range, QMM_Drop);
+    mangleType(TL.getPointeeLoc(), QMM_Drop);
   }
 }
 
-void MicrosoftCXXNameMangler::mangleType(const TemplateTypeParmType *T,
-                                         SourceRange Range) {
+void MicrosoftCXXNameMangler::mangleType(TemplateTypeParmTypeLoc TL) {
   DiagnosticsEngine &Diags = Context.getDiags();
   unsigned DiagID = Diags.getCustomDiagID(DiagnosticsEngine::Error,
     "cannot mangle this template type parameter type yet");
-  Diags.Report(Range.getBegin(), DiagID)
-    << Range;
+  Diags.Report(TL.getBeginLoc(), DiagID) << TL.getSourceRange();
 }
 
-void MicrosoftCXXNameMangler::mangleType(
-                                       const SubstTemplateTypeParmPackType *T,
-                                       SourceRange Range) {
+void MicrosoftCXXNameMangler::mangleType(SubstTemplateTypeParmPackTypeLoc TL) {
   DiagnosticsEngine &Diags = Context.getDiags();
   unsigned DiagID = Diags.getCustomDiagID(DiagnosticsEngine::Error,
     "cannot mangle this substituted parameter pack yet");
-  Diags.Report(Range.getBegin(), DiagID)
-    << Range;
+  Diags.Report(TL.getBeginLoc(), DiagID) << TL.getSourceRange();
 }
 
 // <type> ::= <pointer-type>
 // <pointer-type> ::= E? <pointer-cvr-qualifiers> <cvr-qualifiers> <type>
 //                       # the E is required for 64-bit non static pointers
-void MicrosoftCXXNameMangler::mangleType(const PointerType *T,
-                                         SourceRange Range) {
-  QualType PointeeTy = T->getPointeeType();
+void MicrosoftCXXNameMangler::mangleType(PointerTypeLoc TL) {
+  const PointerType *T = TL.getTypePtr();
   if (PointersAre64Bit && !T->getPointeeType()->isFunctionType())
     Out << 'E';
-  mangleType(PointeeTy, Range);
+  mangleType(TL.getPointeeLoc());
 }
-void MicrosoftCXXNameMangler::mangleType(const ObjCObjectPointerType *T,
-                                         SourceRange Range) {
+void MicrosoftCXXNameMangler::mangleType(ObjCObjectPointerTypeLoc TL) {
   // Object pointers never have qualifiers.
+  const ObjCObjectPointerType *T = TL.getTypePtr();
   Out << 'A';
-  mangleType(T->getPointeeType(), Range);
+  mangleType(TL.getPointeeLoc());
 }
 
 // <type> ::= <reference-type>
 // <reference-type> ::= A E? <cvr-qualifiers> <type>
 //                 # the E is required for 64-bit non static lvalue references
-void MicrosoftCXXNameMangler::mangleType(const LValueReferenceType *T,
-                                         SourceRange Range) {
+void MicrosoftCXXNameMangler::mangleType(LValueReferenceTypeLoc TL) {
+  const LValueReferenceType *T = TL.getTypePtr();
   Out << 'A';
   if (PointersAre64Bit && !T->getPointeeType()->isFunctionType())
     Out << 'E';
-  mangleType(T->getPointeeType(), Range);
+  mangleType(TL.getPointeeLoc());
 }
 
 // <type> ::= <r-value-reference-type>
 // <r-value-reference-type> ::= $$Q E? <cvr-qualifiers> <type>
 //                 # the E is required for 64-bit non static rvalue references
-void MicrosoftCXXNameMangler::mangleType(const RValueReferenceType *T,
-                                         SourceRange Range) {
+void MicrosoftCXXNameMangler::mangleType(RValueReferenceTypeLoc TL) {
+  const RValueReferenceType *T = TL.getTypePtr();
   Out << "$$Q";
   if (PointersAre64Bit && !T->getPointeeType()->isFunctionType())
     Out << 'E';
-  mangleType(T->getPointeeType(), Range);
+  mangleType(TL.getPointeeLoc());
 }
 
-void MicrosoftCXXNameMangler::mangleType(const ComplexType *T,
-                                         SourceRange Range) {
+void MicrosoftCXXNameMangler::mangleType(ComplexTypeLoc TL) {
   DiagnosticsEngine &Diags = Context.getDiags();
   unsigned DiagID = Diags.getCustomDiagID(DiagnosticsEngine::Error,
     "cannot mangle this complex number type yet");
-  Diags.Report(Range.getBegin(), DiagID)
-    << Range;
+  Diags.Report(TL.getBeginLoc(), DiagID) << TL.getSourceRange();
 }
 
-void MicrosoftCXXNameMangler::mangleType(const VectorType *T,
-                                         SourceRange Range) {
+void MicrosoftCXXNameMangler::mangleType(VectorTypeLoc TL) {
+  const VectorType *T = TL.getTypePtr();
   const BuiltinType *ET = T->getElementType()->getAs<BuiltinType>();
   assert(ET && "vectors with non-builtin elements are unsupported");
   uint64_t Width = getASTContext().getTypeSize(T);
@@ -1584,148 +1583,121 @@ void MicrosoftCXXNameMangler::mangleType(const VectorType *T,
     // our own mangling to handle uses of __vector_size__ on user-specified
     // types, and for extensions like __v4sf.
     Out << "T__clang_vec" << T->getNumElements() << '_';
-    mangleType(ET, Range);
+    // Builtin types don't have any interesting typeloc info.
+    TypeLoc ETL(ET, 0);
+    mangleType(ETL);
   }
 
   Out << "@@";
 }
 
-void MicrosoftCXXNameMangler::mangleType(const ExtVectorType *T,
-                                         SourceRange Range) {
+void MicrosoftCXXNameMangler::mangleType(ExtVectorTypeLoc TL) {
   DiagnosticsEngine &Diags = Context.getDiags();
   unsigned DiagID = Diags.getCustomDiagID(DiagnosticsEngine::Error,
     "cannot mangle this extended vector type yet");
-  Diags.Report(Range.getBegin(), DiagID)
-    << Range;
+  Diags.Report(TL.getBeginLoc(), DiagID) << TL.getSourceRange();
 }
-void MicrosoftCXXNameMangler::mangleType(const DependentSizedExtVectorType *T,
-                                         SourceRange Range) {
+void MicrosoftCXXNameMangler::mangleType(DependentSizedExtVectorTypeLoc TL) {
   DiagnosticsEngine &Diags = Context.getDiags();
   unsigned DiagID = Diags.getCustomDiagID(DiagnosticsEngine::Error,
     "cannot mangle this dependent-sized extended vector type yet");
-  Diags.Report(Range.getBegin(), DiagID)
-    << Range;
+  Diags.Report(TL.getBeginLoc(), DiagID) << TL.getSourceRange();
 }
 
-void MicrosoftCXXNameMangler::mangleType(const ObjCInterfaceType *T,
-                                         SourceRange) {
+void MicrosoftCXXNameMangler::mangleType(ObjCInterfaceTypeLoc TL) {
   // ObjC interfaces have structs underlying them.
   Out << 'U';
-  mangleName(T->getDecl());
+  mangleName(TL.getTypePtr()->getDecl());
 }
 
-void MicrosoftCXXNameMangler::mangleType(const ObjCObjectType *T,
-                                         SourceRange Range) {
+void MicrosoftCXXNameMangler::mangleType(ObjCObjectTypeLoc TL) {
   // We don't allow overloading by different protocol qualification,
   // so mangling them isn't necessary.
-  mangleType(T->getBaseType(), Range);
+  mangleType(TL.getBaseLoc());
 }
 
-void MicrosoftCXXNameMangler::mangleType(const BlockPointerType *T,
-                                         SourceRange Range) {
+void MicrosoftCXXNameMangler::mangleType(BlockPointerTypeLoc TL) {
   Out << "_E";
-
-  QualType pointee = T->getPointeeType();
-  mangleFunctionType(pointee->castAs<FunctionProtoType>(), NULL, false, false);
+  mangleFunctionType(TL.getPointeeLoc().castAs<FunctionProtoTypeLoc>(), 0,
+                     false, false);
 }
 
-void MicrosoftCXXNameMangler::mangleType(const InjectedClassNameType *T,
-                                         SourceRange Range) {
+void MicrosoftCXXNameMangler::mangleType(InjectedClassNameTypeLoc TL) {
   DiagnosticsEngine &Diags = Context.getDiags();
   unsigned DiagID = Diags.getCustomDiagID(DiagnosticsEngine::Error,
     "cannot mangle this injected class name type yet");
-  Diags.Report(Range.getBegin(), DiagID)
-    << Range;
+  Diags.Report(TL.getBeginLoc(), DiagID) << TL.getSourceRange();
 }
 
-void MicrosoftCXXNameMangler::mangleType(const TemplateSpecializationType *T,
-                                         SourceRange Range) {
+void MicrosoftCXXNameMangler::mangleType(TemplateSpecializationTypeLoc TL) {
   DiagnosticsEngine &Diags = Context.getDiags();
   unsigned DiagID = Diags.getCustomDiagID(DiagnosticsEngine::Error,
     "cannot mangle this template specialization type yet");
-  Diags.Report(Range.getBegin(), DiagID)
-    << Range;
+  Diags.Report(TL.getBeginLoc(), DiagID) << TL.getSourceRange();
 }
 
-void MicrosoftCXXNameMangler::mangleType(const DependentNameType *T,
-                                         SourceRange Range) {
+void MicrosoftCXXNameMangler::mangleType(DependentNameTypeLoc TL) {
   DiagnosticsEngine &Diags = Context.getDiags();
   unsigned DiagID = Diags.getCustomDiagID(DiagnosticsEngine::Error,
     "cannot mangle this dependent name type yet");
-  Diags.Report(Range.getBegin(), DiagID)
-    << Range;
+  Diags.Report(TL.getBeginLoc(), DiagID) << TL.getSourceRange();
 }
 
-void MicrosoftCXXNameMangler::mangleType(
-                                 const DependentTemplateSpecializationType *T,
-                                 SourceRange Range) {
+void
+MicrosoftCXXNameMangler::mangleType(DependentTemplateSpecializationTypeLoc TL) {
   DiagnosticsEngine &Diags = Context.getDiags();
   unsigned DiagID = Diags.getCustomDiagID(DiagnosticsEngine::Error,
     "cannot mangle this dependent template specialization type yet");
-  Diags.Report(Range.getBegin(), DiagID)
-    << Range;
+  Diags.Report(TL.getBeginLoc(), DiagID) << TL.getSourceRange();
 }
 
-void MicrosoftCXXNameMangler::mangleType(const PackExpansionType *T,
-                                         SourceRange Range) {
+void MicrosoftCXXNameMangler::mangleType(PackExpansionTypeLoc TL) {
   DiagnosticsEngine &Diags = Context.getDiags();
   unsigned DiagID = Diags.getCustomDiagID(DiagnosticsEngine::Error,
     "cannot mangle this pack expansion yet");
-  Diags.Report(Range.getBegin(), DiagID)
-    << Range;
+  Diags.Report(TL.getBeginLoc(), DiagID) << TL.getSourceRange();
 }
 
-void MicrosoftCXXNameMangler::mangleType(const TypeOfType *T,
-                                         SourceRange Range) {
+void MicrosoftCXXNameMangler::mangleType(TypeOfTypeLoc TL) {
   DiagnosticsEngine &Diags = Context.getDiags();
   unsigned DiagID = Diags.getCustomDiagID(DiagnosticsEngine::Error,
     "cannot mangle this typeof(type) yet");
-  Diags.Report(Range.getBegin(), DiagID)
-    << Range;
+  Diags.Report(TL.getBeginLoc(), DiagID) << TL.getSourceRange();
 }
 
-void MicrosoftCXXNameMangler::mangleType(const TypeOfExprType *T,
-                                         SourceRange Range) {
+void MicrosoftCXXNameMangler::mangleType(TypeOfExprTypeLoc TL) {
   DiagnosticsEngine &Diags = Context.getDiags();
   unsigned DiagID = Diags.getCustomDiagID(DiagnosticsEngine::Error,
     "cannot mangle this typeof(expression) yet");
-  Diags.Report(Range.getBegin(), DiagID)
-    << Range;
+  Diags.Report(TL.getBeginLoc(), DiagID) << TL.getSourceRange();
 }
 
-void MicrosoftCXXNameMangler::mangleType(const DecltypeType *T,
-                                         SourceRange Range) {
+void MicrosoftCXXNameMangler::mangleType(DecltypeTypeLoc TL) {
   DiagnosticsEngine &Diags = Context.getDiags();
   unsigned DiagID = Diags.getCustomDiagID(DiagnosticsEngine::Error,
     "cannot mangle this decltype() yet");
-  Diags.Report(Range.getBegin(), DiagID)
-    << Range;
+  Diags.Report(TL.getBeginLoc(), DiagID) << TL.getSourceRange();
 }
 
-void MicrosoftCXXNameMangler::mangleType(const UnaryTransformType *T,
-                                         SourceRange Range) {
+void MicrosoftCXXNameMangler::mangleType(UnaryTransformTypeLoc TL) {
   DiagnosticsEngine &Diags = Context.getDiags();
   unsigned DiagID = Diags.getCustomDiagID(DiagnosticsEngine::Error,
     "cannot mangle this unary transform type yet");
-  Diags.Report(Range.getBegin(), DiagID)
-    << Range;
+  Diags.Report(TL.getBeginLoc(), DiagID) << TL.getSourceRange();
 }
 
-void MicrosoftCXXNameMangler::mangleType(const AutoType *T, SourceRange Range) {
+void MicrosoftCXXNameMangler::mangleType(AutoTypeLoc TL) {
   DiagnosticsEngine &Diags = Context.getDiags();
   unsigned DiagID = Diags.getCustomDiagID(DiagnosticsEngine::Error,
     "cannot mangle this 'auto' type yet");
-  Diags.Report(Range.getBegin(), DiagID)
-    << Range;
+  Diags.Report(TL.getBeginLoc(), DiagID) << TL.getSourceRange();
 }
 
-void MicrosoftCXXNameMangler::mangleType(const AtomicType *T,
-                                         SourceRange Range) {
+void MicrosoftCXXNameMangler::mangleType(AtomicTypeLoc TL) {
   DiagnosticsEngine &Diags = Context.getDiags();
   unsigned DiagID = Diags.getCustomDiagID(DiagnosticsEngine::Error,
     "cannot mangle this C11 atomic type yet");
-  Diags.Report(Range.getBegin(), DiagID)
-    << Range;
+  Diags.Report(TL.getBeginLoc(), DiagID) << TL.getSourceRange();
 }
 
 void MicrosoftMangleContext::mangleName(const NamedDecl *D,

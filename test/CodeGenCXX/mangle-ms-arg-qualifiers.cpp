@@ -204,3 +204,10 @@ void mangle_fwd(char * x) {}
 void mangle_no_fwd(char * x) {}
 // CHECK: "\01?mangle_no_fwd@@YAXPAD@Z"
 // X64:   "\01?mangle_no_fwd@@YAXPEAD@Z"
+
+// Hide the array deep in the type and make sure we don't lose it.
+void deep_array(
+    void (*fp)(
+        void (*fp)(
+            void (*fp)(
+                void (*fp)(ArrayFunPtr ap))))) {}
