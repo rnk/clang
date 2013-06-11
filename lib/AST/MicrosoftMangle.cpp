@@ -87,8 +87,7 @@ public:
   void mangleVariableEncoding(const VarDecl *VD);
   void mangleNumber(int64_t Number);
   void mangleNumber(const llvm::APSInt &Value);
-  void mangleType(QualType T, SourceRange Range,
-                  QualifierMangleMode QMM = QMM_Mangle);
+  void mangleType(TypeLoc TL, QualifierMangleMode QMM = QMM_Mangle);
 
 private:
   void disableBackReferences() { UseNameBackReferences = false; }
@@ -109,23 +108,22 @@ private:
   void mangleObjCMethodName(const ObjCMethodDecl *MD);
   void mangleLocalName(const FunctionDecl *FD);
 
-  void mangleArgumentType(QualType T, SourceRange Range);
+  void mangleArgumentType(TypeLoc TL);
 
   // Declare manglers for every type class.
 #define ABSTRACT_TYPE(CLASS, PARENT)
 #define NON_CANONICAL_TYPE(CLASS, PARENT)
-#define TYPE(CLASS, PARENT) void mangleType(const CLASS##Type *T, \
-                                            SourceRange Range);
+#define TYPE(CLASS, PARENT) void mangleType(CLASS##TypeLoc TL);
 #include "clang/AST/TypeNodes.def"
 #undef ABSTRACT_TYPE
 #undef NON_CANONICAL_TYPE
 #undef TYPE
   
-  void mangleType(const TagType*);
-  void mangleFunctionType(const FunctionType *T, const FunctionDecl *D,
-                          bool IsStructor, bool IsInstMethod);
-  void mangleDecayedArrayType(const ArrayType *T, bool IsGlobal);
-  void mangleArrayType(const ArrayType *T, Qualifiers Quals);
+  void mangleType(TagTypeLoc);
+  void mangleFunctionType(FunctionTypeLoc TL, bool IsStructor,
+                          bool IsInstMethod);
+  void mangleDecayedArrayType(ArrayTypeLoc TL, bool IsGlobal);
+  void mangleArrayType(ArrayTypeLoc TL, Qualifiers Quals);
   void mangleFunctionClass(const FunctionDecl *FD);
   void mangleCallingConvention(const FunctionType *T, bool IsInstMethod = false);
   void mangleIntegerLiteral(const llvm::APSInt &Number, bool IsBoolean);
@@ -975,8 +973,8 @@ void MicrosoftCXXNameMangler::manglePointerQualifiers(Qualifiers Quals) {
   }
 }
 
-void MicrosoftCXXNameMangler::mangleArgumentType(QualType T,
-                                                 SourceRange Range) {
+void MicrosoftCXXNameMangler::mangleArgumentType(TypeLoc TL) {
+  QualType T = TL.getType();
   void *TypePtr = getASTContext().getCanonicalType(T).getAsOpaquePtr();
   ArgBackRefMap::iterator Found = TypeBackReferences.find(TypePtr);
 
