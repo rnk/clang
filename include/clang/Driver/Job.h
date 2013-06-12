@@ -13,6 +13,7 @@
 #include "clang/Basic/LLVM.h"
 #include "clang/Driver/Util.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Option/Option.h"
 
 namespace clang {
 namespace driver {
@@ -57,11 +58,11 @@ class Command : public Job {
 
   /// The list of program arguments (not including the implicit first
   /// argument, which will be the executable).
-  ArgStringList Arguments;
+  llvm::opt::ArgStringList Arguments;
 
 public:
   Command(const Action &_Source, const Tool &_Creator, const char *_Executable,
-          const ArgStringList &_Arguments);
+          const llvm::opt::ArgStringList &_Arguments);
 
   /// getSource - Return the Action which caused the creation of this job.
   const Action &getSource() const { return Source; }
@@ -71,7 +72,7 @@ public:
 
   const char *getExecutable() const { return Executable; }
 
-  const ArgStringList &getArguments() const { return Arguments; }
+  const llvm::opt::ArgStringList &getArguments() const { return Arguments; }
 
   static bool classof(const Job *J) {
     return J->getKind() == CommandClass;
