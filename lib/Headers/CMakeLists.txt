@@ -41,6 +41,7 @@ set(files
   xopintrin.h
   cpuid.h
   unwind.h
+  msvcrt_picker.h
   module.map
   )
 

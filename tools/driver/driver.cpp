@@ -313,6 +313,11 @@ static void ParseProgName(SmallVectorImpl<const char *> &ArgVector,
       }
     }
 
+    // If we were invoked as clang-cl, add the flag that makes us accept MSVC
+    // arguments.
+    if (ProgNameRef.endswith("clang-cl"))
+      ArgVector.insert(&ArgVector[1], "-ccc-msvc");
+
     if (FoundMatch) {
       StringRef::size_type LastComponent = ProgNameRef.rfind('-',
         ProgNameRef.size() - strlen(suffixes[i].Suffix));
