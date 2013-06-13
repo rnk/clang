@@ -29,7 +29,8 @@ enum ClangFlags {
   NoForward = (1 << 7),
   Unsupported = (1 << 8),
   CC1Option = (1 << 9),
-  NoDriverOption = (1 << 10)
+  NoDriverOption = (1 << 10),
+  MSVCOption = (1 << 11)
 };
 
 enum ID {

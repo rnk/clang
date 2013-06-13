@@ -20,8 +20,6 @@
 
 namespace clang {
 namespace driver {
-class OptTable;
-
 namespace toolchains {
 
 /// Generic_GCC - A tool chain using the 'gcc' command to perform
