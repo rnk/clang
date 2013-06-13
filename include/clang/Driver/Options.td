@@ -42,6 +42,10 @@ def CC1Option : OptionFlag;
 // NoDriverOption - This option should not be accepted by the driver.
 def NoDriverOption : OptionFlag;
 
+// MSVCOption - This option should only be accepted for compatiblity with
+// MSVC's frontend cl.exe.
+def MSVCOption : OptionFlag;
+
 /////////
 // Groups
 
