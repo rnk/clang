@@ -650,7 +650,7 @@ bool Driver::HandleImmediateArgs(const Compilation &C) {
 
   if (C.getArgs().hasArg(options::OPT__QUESTION)) {
     getOpts().PrintHelp(llvm::outs(), Name.c_str(), DriverTitle.c_str(),
-                        options::MSVCOption, 0);
+                        options::MSVCOption, /*Exclude*/ 0);
     return false;
   }
 

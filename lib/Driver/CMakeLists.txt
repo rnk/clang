@@ -5,6 +5,8 @@ add_clang_library(clangDriver
   Driver.cpp
   DriverOptions.cpp
   Job.cpp
+  MSVCOptions.cpp
+  MSVCRewriter.cpp
   Phases.cpp
   Tool.cpp
   ToolChain.cpp
@@ -14,12 +16,17 @@ add_clang_library(clangDriver
   Types.cpp
   )
 
+set(LLVM_TARGET_DEFINITIONS MSVCOptions.td)
+tablegen(CLANG MSVCOptions.inc -gen-opt-parser-defs)
+add_public_tablegen_target(ClangMSVCOptions)
+
 add_dependencies(clangDriver
   ClangAttrList
   ClangCC1AsOptions
   ClangDiagnosticCommon
   ClangDiagnosticDriver
   ClangDriverOptions
+  ClangMSVCOptions
   )
 
 target_link_libraries(clangDriver
