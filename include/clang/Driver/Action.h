@@ -16,12 +16,15 @@
 
 namespace llvm {
 namespace opt {
-class Arg;
+  class Arg;
 }
 }
 
 namespace clang {
 namespace driver {
+  // FIXME: Remove this using directive and qualify class usage below.
+  using namespace llvm::opt;
+
 
 /// Action - Represent an abstract compilation step to perform.
 ///
@@ -99,12 +102,11 @@ public:
 
 class InputAction : public Action {
   virtual void anchor();
-  const llvm::opt::Arg &Input;
-
+  const Arg &Input;
 public:
-  InputAction(const llvm::opt::Arg &_Input, types::ID _Type);
+  InputAction(const Arg &_Input, types::ID _Type);
 
-  const llvm::opt::Arg &getInputArg() const { return Input; }
+  const Arg &getInputArg() const { return Input; }
 
   static bool classof(const Action *A) {
     return A->getKind() == InputClass;

@@ -26,16 +26,19 @@
 
 namespace llvm {
 namespace opt {
-class Arg;
-class ArgList;
-class DerivedArgList;
-class InputArgList;
-class OptTable;
+  class Arg;
+  class ArgList;
+  class DerivedArgList;
+  class InputArgList;
+  class OptTable;
 }
 }
 
 namespace clang {
 namespace driver {
+  // FIXME: Remove this using directive and qualify class usage below.
+  using namespace llvm::opt;
+
   class Action;
   class Command;
   class Compilation;
@@ -46,7 +49,7 @@ namespace driver {
 /// Driver - Encapsulate logic for constructing compilation processes
 /// from a set of gcc-driver-like command line arguments.
 class Driver {
-  llvm::opt::OptTable *Opts;
+  OptTable *Opts;
 
   DiagnosticsEngine &Diags;
 
@@ -112,8 +115,7 @@ public:
   const char *CCLogDiagnosticsFilename;
 
   /// A list of inputs and their types for the given arguments.
-  typedef SmallVector<std::pair<types::ID, const llvm::opt::Arg *>, 16>
-      InputList;
+  typedef SmallVector<std::pair<types::ID, const Arg*>, 16> InputList;
 
   /// Whether the driver should follow g++ like behavior.
   unsigned CCCIsCXX : 1;
@@ -172,13 +174,12 @@ private:
 private:
   /// TranslateInputArgs - Create a new derived argument list from the input
   /// arguments, after applying the standard argument translations.
-  llvm::opt::DerivedArgList *
-      TranslateInputArgs(const llvm::opt::InputArgList &Args) const;
+  DerivedArgList *TranslateInputArgs(const InputArgList &Args) const;
 
   // getFinalPhase - Determine which compilation mode we are in and record 
   // which option we used to determine the final phase.
-  phases::ID getFinalPhase(const llvm::opt::DerivedArgList &DAL,
-                           llvm::opt::Arg **FinalPhaseArg = 0) const;
+  phases::ID getFinalPhase(const DerivedArgList &DAL, Arg **FinalPhaseArg = 0)
+    const;
 
 public:
   Driver(StringRef _ClangExecutable,
@@ -193,7 +194,8 @@ public:
   /// Name to use when invoking gcc/g++.
   const std::string &getCCCGenericGCCName() const { return CCCGenericGCCName; }
 
-  const llvm::opt::OptTable &getOpts() const { return *Opts; }
+
+  const OptTable &getOpts() const { return *Opts; }
 
   const DiagnosticsEngine &getDiags() const { return Diags; }
 
@@ -236,8 +238,8 @@ public:
   /// @{
 
   /// ParseArgStrings - Parse the given list of strings into an
-  /// llvm::opt::ArgList.
-  llvm::opt::InputArgList *ParseArgStrings(ArrayRef<const char *> Args);
+  /// ArgList.
+  InputArgList *ParseArgStrings(ArrayRef<const char *> Args);
 
   /// BuildInputs - Construct the list of inputs and their types from 
   /// the given arguments.
@@ -246,7 +248,7 @@ public:
   /// \param Args - The input arguments.
   /// \param Inputs - The list to store the resulting compilation 
   /// inputs onto.
-  void BuildInputs(const ToolChain &TC, const llvm::opt::DerivedArgList &Args,
+  void BuildInputs(const ToolChain &TC, const DerivedArgList &Args,
                    InputList &Inputs) const;
 
   /// BuildActions - Construct the list of actions to perform for the
@@ -255,7 +257,7 @@ public:
   /// \param TC - The default host tool chain.
   /// \param Args - The input arguments.
   /// \param Actions - The list to store the resulting actions onto.
-  void BuildActions(const ToolChain &TC, const llvm::opt::DerivedArgList &Args,
+  void BuildActions(const ToolChain &TC, const DerivedArgList &Args,
                     const InputList &Inputs, ActionList &Actions) const;
 
   /// BuildUniversalActions - Construct the list of actions to perform
@@ -264,8 +266,7 @@ public:
   /// \param TC - The default host tool chain.
   /// \param Args - The input arguments.
   /// \param Actions - The list to store the resulting actions onto.
-  void BuildUniversalActions(const ToolChain &TC,
-                             const llvm::opt::DerivedArgList &Args,
+  void BuildUniversalActions(const ToolChain &TC, const DerivedArgList &Args,
                              const InputList &BAInputs,
                              ActionList &Actions) const;
 
@@ -303,7 +304,7 @@ public:
   void PrintHelp(bool ShowHidden) const;
 
   /// PrintOptions - Print the list of arguments.
-  void PrintOptions(const llvm::opt::ArgList &Args) const;
+  void PrintOptions(const ArgList &Args) const;
 
   /// PrintVersion - Print the driver version.
   void PrintVersion(const Compilation &C, raw_ostream &OS) const;
@@ -334,8 +335,9 @@ public:
   /// ConstructAction - Construct the appropriate action to do for
   /// \p Phase on the \p Input, taking in to account arguments
   /// like -fsyntax-only or --analyze.
-  Action *ConstructPhaseAction(const llvm::opt::ArgList &Args, phases::ID Phase,
+  Action *ConstructPhaseAction(const ArgList &Args, phases::ID Phase,
                                Action *Input) const;
+
 
   /// BuildJobsForAction - Construct the jobs to perform for the
   /// action \p A.
@@ -376,14 +378,14 @@ public:
   /// handle this action.
   bool ShouldUseClangCompiler(const JobAction &JA) const;
 
-  bool IsUsingLTO(const llvm::opt::ArgList &Args) const;
+  bool IsUsingLTO(const ArgList &Args) const;
 
 private:
   /// \brief Retrieves a ToolChain for a particular target triple.
   ///
   /// Will cache ToolChains for the life of the driver object, and create them
   /// on-demand.
-  const ToolChain &getToolChain(const llvm::opt::ArgList &Args,
+  const ToolChain &getToolChain(const ArgList &Args,
                                 StringRef DarwinArchName = "") const;
 
   /// @}

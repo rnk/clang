@@ -12,12 +12,15 @@
 
 namespace llvm {
 namespace opt {
-class OptTable;
+  class OptTable;
 }
 }
 
 namespace clang {
 namespace driver {
+  // FIXME: Remove this using directive and qualify class usage below.
+  using namespace llvm::opt;
+
 
 namespace cc1asoptions {
   enum ID {
@@ -32,7 +35,7 @@ namespace cc1asoptions {
   };
 }
 
-llvm::opt::OptTable *createCC1AsOptTable();
+  OptTable *createCC1AsOptTable();
 }
 }
 

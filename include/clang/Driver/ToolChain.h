@@ -16,15 +16,14 @@
 #include "llvm/ADT/OwningPtr.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Triple.h"
-#include "llvm/Option/Option.h"
 #include "llvm/Support/Path.h"
 #include <string>
 
 namespace llvm {
 namespace opt {
-class ArgList;
-class DerivedArgList;
-class InputArgList;
+  class ArgList;
+  class DerivedArgList;
+  class InputArgList;
 }
 }
 
@@ -32,6 +31,9 @@ namespace clang {
   class ObjCRuntime;
 
 namespace driver {
+  // FIXME: Remove this using directive and qualify class usage below.
+  using namespace llvm::opt;
+
   class Compilation;
   class Driver;
   class JobAction;
@@ -55,7 +57,7 @@ public:
 private:
   const Driver &D;
   const llvm::Triple Triple;
-  const llvm::opt::ArgList &Args;
+  const ArgList &Args;
 
   /// The list of toolchain specific path prefixes to search for
   /// files.
@@ -74,8 +76,7 @@ private:
   Tool *getClangAs() const;
 
 protected:
-  ToolChain(const Driver &D, const llvm::Triple &T,
-            const llvm::opt::ArgList &Args);
+  ToolChain(const Driver &D, const llvm::Triple &T, const ArgList &Args);
 
   virtual Tool *buildAssembler() const;
   virtual Tool *buildLinker() const;
@@ -83,18 +84,17 @@ protected:
 
   /// \name Utilities for implementing subclasses.
   ///@{
-  static void addSystemInclude(const llvm::opt::ArgList &DriverArgs,
-                               llvm::opt::ArgStringList &CC1Args,
+  static void addSystemInclude(const ArgList &DriverArgs,
+                               ArgStringList &CC1Args,
                                const Twine &Path);
-  static void addExternCSystemInclude(const llvm::opt::ArgList &DriverArgs,
-                                      llvm::opt::ArgStringList &CC1Args,
+  static void addExternCSystemInclude(const ArgList &DriverArgs,
+                                      ArgStringList &CC1Args,
                                       const Twine &Path);
-  static void
-      addExternCSystemIncludeIfExists(const llvm::opt::ArgList &DriverArgs,
-                                      llvm::opt::ArgStringList &CC1Args,
-                                      const Twine &Path);
-  static void addSystemIncludes(const llvm::opt::ArgList &DriverArgs,
-                                llvm::opt::ArgStringList &CC1Args,
+  static void addExternCSystemIncludeIfExists(const ArgList &DriverArgs,
+                                              ArgStringList &CC1Args,
+                                              const Twine &Path);
+  static void addSystemIncludes(const ArgList &DriverArgs,
+                                ArgStringList &CC1Args,
                                 ArrayRef<StringRef> Paths);
   ///@}
 
@@ -132,9 +132,8 @@ public:
   /// specific translations are needed.
   ///
   /// \param BoundArch - The bound architecture name, or 0.
-  virtual llvm::opt::DerivedArgList *
-  TranslateArgs(const llvm::opt::DerivedArgList &Args,
-                const char *BoundArch) const {
+  virtual DerivedArgList *TranslateArgs(const DerivedArgList &Args,
+                                        const char *BoundArch) const {
     return 0;
   }
 
@@ -234,18 +233,16 @@ public:
 
   /// ComputeLLVMTriple - Return the LLVM target triple to use, after taking
   /// command line arguments into account.
-  virtual std::string
-      ComputeLLVMTriple(const llvm::opt::ArgList &Args,
-                        types::ID InputType = types::TY_INVALID) const;
+  virtual std::string ComputeLLVMTriple(const ArgList &Args,
+                                 types::ID InputType = types::TY_INVALID) const;
 
   /// ComputeEffectiveClangTriple - Return the Clang triple to use for this
   /// target, which may take into account the command line arguments. For
   /// example, on Darwin the -mmacosx-version-min= command line argument (which
   /// sets the deployment target) determines the version in the triple passed to
   /// Clang.
-  virtual std::string ComputeEffectiveClangTriple(
-      const llvm::opt::ArgList &Args,
-      types::ID InputType = types::TY_INVALID) const;
+  virtual std::string ComputeEffectiveClangTriple(const ArgList &Args,
+                                 types::ID InputType = types::TY_INVALID) const;
 
   /// getDefaultObjCRuntime - Return the default Objective-C runtime
   /// for this platform.
@@ -264,46 +261,42 @@ public:
   ///
   /// This routine is responsible for adding the necessary cc1 arguments to
   /// include headers from standard system header directories.
-  virtual void
-      AddClangSystemIncludeArgs(const llvm::opt::ArgList &DriverArgs,
-                                llvm::opt::ArgStringList &CC1Args) const;
+  virtual void AddClangSystemIncludeArgs(const ArgList &DriverArgs,
+                                         ArgStringList &CC1Args) const;
 
   /// \brief Add options that need to be passed to cc1 for this target.
-  virtual void addClangTargetOptions(const llvm::opt::ArgList &DriverArgs,
-                                     llvm::opt::ArgStringList &CC1Args) const;
+  virtual void addClangTargetOptions(const ArgList &DriverArgs,
+                                     ArgStringList &CC1Args) const;
 
   // GetRuntimeLibType - Determine the runtime library type to use with the
   // given compilation arguments.
-  virtual RuntimeLibType
-      GetRuntimeLibType(const llvm::opt::ArgList &Args) const;
+  virtual RuntimeLibType GetRuntimeLibType(const ArgList &Args) const;
 
   // GetCXXStdlibType - Determine the C++ standard library type to use with the
   // given compilation arguments.
-  virtual CXXStdlibType GetCXXStdlibType(const llvm::opt::ArgList &Args) const;
+  virtual CXXStdlibType GetCXXStdlibType(const ArgList &Args) const;
 
   /// AddClangCXXStdlibIncludeArgs - Add the clang -cc1 level arguments to set
   /// the include paths to use for the given C++ standard library type.
-  virtual void
-      AddClangCXXStdlibIncludeArgs(const llvm::opt::ArgList &DriverArgs,
-                                   llvm::opt::ArgStringList &CC1Args) const;
+  virtual void AddClangCXXStdlibIncludeArgs(const ArgList &DriverArgs,
+                                            ArgStringList &CC1Args) const;
 
   /// AddCXXStdlibLibArgs - Add the system specific linker arguments to use
   /// for the given C++ standard library type.
-  virtual void AddCXXStdlibLibArgs(const llvm::opt::ArgList &Args,
-                                   llvm::opt::ArgStringList &CmdArgs) const;
+  virtual void AddCXXStdlibLibArgs(const ArgList &Args,
+                                   ArgStringList &CmdArgs) const;
 
   /// AddCCKextLibArgs - Add the system specific linker arguments to use
   /// for kernel extensions (Darwin-specific).
-  virtual void AddCCKextLibArgs(const llvm::opt::ArgList &Args,
-                                llvm::opt::ArgStringList &CmdArgs) const;
+  virtual void AddCCKextLibArgs(const ArgList &Args,
+                                ArgStringList &CmdArgs) const;
 
   /// AddFastMathRuntimeIfAvailable - If a runtime library exists that sets
   /// global flags for unsafe floating point math, add it and return true.
   ///
   /// This checks for presence of the -ffast-math or -funsafe-math flags.
-  virtual bool
-      AddFastMathRuntimeIfAvailable(const llvm::opt::ArgList &Args,
-                                    llvm::opt::ArgStringList &CmdArgs) const;
+  virtual bool AddFastMathRuntimeIfAvailable(const ArgList &Args,
+                                             ArgStringList &CmdArgs) const;
 };
 
 } // end namespace driver

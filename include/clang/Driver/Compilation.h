@@ -18,13 +18,16 @@
 
 namespace llvm {
 namespace opt {
-class DerivedArgList;
-class InputArgList;
+  class DerivedArgList;
+  class InputArgList;
 }
 }
 
 namespace clang {
 namespace driver {
+  // FIXME: Remove this using directive and qualify class usage below.
+  using namespace llvm::opt;
+
   class Driver;
   class JobAction;
   class JobList;
@@ -40,11 +43,11 @@ class Compilation {
   const ToolChain &DefaultToolChain;
 
   /// The original (untranslated) input argument list.
-  llvm::opt::InputArgList *Args;
+  InputArgList *Args;
 
   /// The driver translated arguments. Note that toolchains may perform their
   /// own argument translation.
-  llvm::opt::DerivedArgList *TranslatedArgs;
+  DerivedArgList *TranslatedArgs;
 
   /// The list of actions.
   ActionList Actions;
@@ -54,11 +57,11 @@ class Compilation {
 
   /// Cache of translated arguments for a particular tool chain and bound
   /// architecture.
-  llvm::DenseMap<std::pair<const ToolChain *, const char *>,
-                 llvm::opt::DerivedArgList *> TCArgs;
+  llvm::DenseMap<std::pair<const ToolChain*, const char*>,
+                 DerivedArgList*> TCArgs;
 
   /// Temporary files which should be removed on exit.
-  llvm::opt::ArgStringList TempFiles;
+  ArgStringList TempFiles;
 
   /// Result files which should be removed on failure.
   ArgStringMap ResultFiles;
@@ -72,19 +75,18 @@ class Compilation {
 
 public:
   Compilation(const Driver &D, const ToolChain &DefaultToolChain,
-              llvm::opt::InputArgList *Args,
-              llvm::opt::DerivedArgList *TranslatedArgs);
+              InputArgList *Args, DerivedArgList *TranslatedArgs);
   ~Compilation();
 
   const Driver &getDriver() const { return TheDriver; }
 
   const ToolChain &getDefaultToolChain() const { return DefaultToolChain; }
 
-  const llvm::opt::InputArgList &getInputArgs() const { return *Args; }
+  const InputArgList &getInputArgs() const { return *Args; }
 
-  const llvm::opt::DerivedArgList &getArgs() const { return *TranslatedArgs; }
+  const DerivedArgList &getArgs() const { return *TranslatedArgs; }
 
-  llvm::opt::DerivedArgList &getArgs() { return *TranslatedArgs; }
+  DerivedArgList &getArgs() { return *TranslatedArgs; }
 
   ActionList &getActions() { return Actions; }
   const ActionList &getActions() const { return Actions; }
@@ -94,7 +96,7 @@ public:
 
   void addCommand(Command *C) { Jobs.addJob(C); }
 
-  const llvm::opt::ArgStringList &getTempFiles() const { return TempFiles; }
+  const ArgStringList &getTempFiles() const { return TempFiles; }
 
   const ArgStringMap &getResultFiles() const { return ResultFiles; }
 
@@ -109,8 +111,8 @@ public:
   /// tool chain \p TC (or the default tool chain, if TC is not specified).
   ///
   /// \param BoundArch - The bound architecture name, or 0.
-  const llvm::opt::DerivedArgList &getArgsForToolChain(const ToolChain *TC,
-                                                       const char *BoundArch);
+  const DerivedArgList &getArgsForToolChain(const ToolChain *TC,
+                                            const char *BoundArch);
 
   /// addTempFile - Add a file to remove on exit, and returns its
   /// argument.
@@ -143,7 +145,7 @@ public:
   ///
   /// \param IssueErrors - Report failures as errors.
   /// \return Whether all files were removed successfully.
-  bool CleanupFileList(const llvm::opt::ArgStringList &Files,
+  bool CleanupFileList(const ArgStringList &Files,
                        bool IssueErrors = false) const;
 
   /// CleanupFileMap - Remove the files in the given map.
