@@ -43,7 +43,6 @@ class DiagnosticsEngine;
 namespace driver {
   // FIXME: Remove this using directive and qualify class usage below.
   using namespace llvm::opt;
-
 }
 
 /// \brief Fill out Opts based on the options given in Args.

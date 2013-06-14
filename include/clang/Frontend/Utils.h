@@ -109,9 +109,8 @@ createInvocationFromCommandLine(ArrayRef<const char *> Args,
                             IntrusiveRefCntPtr<DiagnosticsEngine> Diags =
                                 IntrusiveRefCntPtr<DiagnosticsEngine>());
 
-/// getLastArgValue - Return the value of the last argument as an integer,
-/// or a default. If Diags is non-null, emits an error if the argument
-/// is given, but non-integral.
+/// Return the value of the last argument as an integer, or a default. If Diags
+/// is non-null, emits an error if the argument is given, but non-integral.
 int getLastArgIntValue(const llvm::opt::ArgList &Args,
                        llvm::opt::OptSpecifier Id, int Default,
                        DiagnosticsEngine *Diags = 0);
