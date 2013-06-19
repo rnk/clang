@@ -211,7 +211,7 @@ E::E() {
   // CHECK: br i1 %[[SHOULD_CALL_VBASE_CTORS]], label %[[INIT_VBASES:.*]], label %[[SKIP_VBASES:.*]]
   //
   // CHECK: [[INIT_VBASES]]
-  // CHECK-NEXT: %[[this_i8:.*]] = bitcast %"struct.constructors::E"* %this1 to i8*
+  // CHECK-NEXT: %[[this_i8:.*]] = bitcast %"struct.constructors::E"* %{{.*}} to i8*
   // CHECK-NEXT: %[[offs:.*]] = getelementptr inbounds i8* %[[this_i8]], i64 0
   // CHECK-NEXT: %[[vbptr_E:.*]] = bitcast i8* %[[offs]] to [3 x i32]**
   // CHECK-NEXT: store [3 x i32]* @"\01??_8E@constructors@@7B01@@", [3 x i32]** %[[vbptr_E]]

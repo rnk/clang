@@ -359,7 +359,6 @@ MicrosoftCXXABI::EmitCtorCompleteObjectHandler(CodeGenFunction &CGF,
 
 void MicrosoftCXXABI::EmitVBPtrStores(CodeGenFunction &CGF,
                                       const CXXRecordDecl *RD) {
-  const ASTRecordLayout &Layout = getContext().getASTRecordLayout(RD);
   llvm::Value *ThisInt8Ptr =
     CGF.Builder.CreateBitCast(getThisValue(CGF), CGM.Int8PtrTy, "this.int8");
 
