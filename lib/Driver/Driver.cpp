@@ -81,11 +81,63 @@ Driver::~Driver() {
     delete I->second;
 }
 
+InputArgList *Driver::ParseMSVCArgs(ArrayRef<const char *> ArgList,
+                                    unsigned &MissingArgIndex,
+                                    unsigned &MissingArgCount) {
+  InputArgList *Args = new InputArgList(ArgList.begin(), ArgList.end());
+
+  MissingArgIndex = MissingArgCount = 0;
+  unsigned Index = 0, End = ArgList.size();
+  while (Index < End) {
+    // Ignore empty arguments (other things may still take them as arguments).
+    if (Args->getArgString(Index)[0] == '\0') {
+      ++Index;
+      continue;
+    }
+
+    // Try to parse as if it's an MSVC arg and fall back to non-MSVC.
+    unsigned Next = Index;
+    Arg *A = getOpts().ParseOneArg(*Args, Next, options::MSVCOption);
+    assert(Next > Index && "Parser failed to consume argument.");
+
+    if (A && A->getOption().getKind() == Option::UnknownClass) {
+      delete A;  // FIXME: Avoid useless mallocs.
+      Next = Index;
+      A = getOpts().ParseOneArg(*Args, Next, ~options::MSVCOption);
+      assert(Next > Index && "Parser failed to consume argument.");
+    }
+
+    if (!A) {
+      MissingArgIndex = Index;
+      MissingArgCount = Next - Index - 1;
+      break;
+    }
+
+    Args->append(A);
+    Index = Next;
+  }
+  assert(Index >= End && "Unexpected parser error.");
+
+  return Args;
+}
+
 InputArgList *Driver::ParseArgStrings(ArrayRef<const char *> ArgList) {
   llvm::PrettyStackTraceString CrashInfo("Command line argument parsing");
+
+  // If -ccc-msvc is the first argument, use a two-pass parse: do the initial
+  // parse with only MSVC flags, and then reparse every arg that we didn't match
+  // an MSVC option.  This ensures that conflicting flags like -MD get
+  // interpreted as MSVC options without imposing tough sorting requirements on
+  // the option table.
+  bool IsMSVC = !ArgList.empty() && StringRef(ArgList[0]) == "-ccc-msvc";
+
   unsigned MissingArgIndex, MissingArgCount;
-  InputArgList *Args = getOpts().ParseArgs(ArgList.begin(), ArgList.end(),
-                                           MissingArgIndex, MissingArgCount);
+  InputArgList *Args;
+  if (IsMSVC)
+    Args = ParseMSVCArgs(ArgList, MissingArgIndex, MissingArgCount);
+  else
+    Args = getOpts().ParseArgs(ArgList.begin(), ArgList.end(), MissingArgIndex,
+                               MissingArgCount, 0, options::MSVCOption);
 
   // Check for missing argument error.
   if (MissingArgCount)
@@ -582,8 +634,9 @@ void Driver::PrintOptions(const ArgList &Args) const {
 
 void Driver::PrintHelp(bool ShowHidden) const {
   getOpts().PrintHelp(
-      llvm::outs(), Name.c_str(), DriverTitle.c_str(), /*Include*/ 0,
-      /*Exclude*/ options::NoDriverOption | (ShowHidden ? 0 : HelpHidden));
+      llvm::outs(), Name.c_str(), DriverTitle.c_str(), /*Include*/0,
+      /*Exclude*/options::NoDriverOption | options::MSVCOption |
+      (ShowHidden ? 0 : HelpHidden));
 }
 
 void Driver::PrintVersion(const Compilation &C, raw_ostream &OS) const {
@@ -636,6 +689,12 @@ bool Driver::HandleImmediateArgs(const Compilation &C) {
   if (C.getArgs().hasArg(options::OPT_help) ||
       C.getArgs().hasArg(options::OPT__help_hidden)) {
     PrintHelp(C.getArgs().hasArg(options::OPT__help_hidden));
+    return false;
+  }
+
+  if (C.getArgs().hasArg(options::OPT__QUESTION)) {
+    getOpts().PrintHelp(llvm::outs(), Name.c_str(), DriverTitle.c_str(),
+                        options::MSVCOption, 0);
     return false;
   }
 

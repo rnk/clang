@@ -626,6 +626,13 @@ public:
   AddClangCXXStdlibIncludeArgs(const llvm::opt::ArgList &DriverArgs,
                                llvm::opt::ArgStringList &CC1Args) const;
 
+  /// \brief Translates any MSVC arguments that can be easily rewritten as
+  /// clang/gcc style arguments.  Some, like /showIncludes, cannot be rewritten
+  /// and require support from clang -cc1.
+  virtual llvm::opt::DerivedArgList *
+      TranslateArgs(const llvm::opt::DerivedArgList &Args,
+                    const char *BoundArch) const;
+
 protected:
   virtual Tool *buildLinker() const;
   virtual Tool *buildAssembler() const;

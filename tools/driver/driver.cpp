@@ -28,6 +28,7 @@
 #include "llvm/Option/ArgList.h"
 #include "llvm/Option/OptTable.h"
 #include "llvm/Option/Option.h"
+#include "llvm/Support/ConvertUTF.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Host.h"
@@ -39,6 +40,7 @@
 #include "llvm/Support/Program.h"
 #include "llvm/Support/Regex.h"
 #include "llvm/Support/Signals.h"
+#include "llvm/Support/SwapByteOrder.h"
 #include "llvm/Support/TargetRegistry.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/Timer.h"
@@ -296,6 +298,10 @@ static void ParseProgName(SmallVectorImpl<const char *> &ArgVector,
     { "++", true, false },
   };
   std::string ProgName(llvm::sys::path::stem(ArgVector[0]));
+#ifdef LLVM_ON_WIN32
+  // Windows paths are case insensitive.
+  std::transform(ProgName.begin(), ProgName.end(), ProgName.begin(), ::tolower);
+#endif
   StringRef ProgNameRef(ProgName);
   StringRef Prefix;
 
@@ -313,6 +319,11 @@ static void ParseProgName(SmallVectorImpl<const char *> &ArgVector,
         break;
       }
     }
+
+    // If we were invoked as cl.exe, add the flag that makes us accept MSVC
+    // arguments.
+    if (ProgNameRef.endswith("cl"))
+      ArgVector.insert(ArgVector.begin() + 1, "-ccc-msvc");
 
     if (FoundMatch) {
       StringRef::size_type LastComponent = ProgNameRef.rfind('-',

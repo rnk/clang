@@ -387,6 +387,12 @@ private:
   const ToolChain &getToolChain(const llvm::opt::ArgList &Args,
                                 StringRef DarwinArchName = "") const;
 
+  /// \brief Parse the given list of strings into an ArgList while giving
+  /// precedence to MSVC options if there is a conflict.
+  llvm::opt::InputArgList *ParseMSVCArgs(ArrayRef<const char *> ArgList,
+                                         unsigned &MissingArgIndex,
+                                         unsigned &MissingArgCount);
+
   /// @}
 
 public:

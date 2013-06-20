@@ -340,3 +340,126 @@ void Windows::AddClangCXXStdlibIncludeArgs(const ArgList &DriverArgs,
                                            ArgStringList &CC1Args) const {
   // FIXME: There should probably be logic here to find libc++ on Windows.
 }
+
+static bool TranslateMSVCRTFlag(const ToolChain *TC, const Arg *A,
+                                DerivedArgList *DAL, const OptTable &Opts,
+                                unsigned OptId) {
+  switch (OptId) {
+  case options::OPT__SLASH_MDd:
+    DAL->AddJoinedArg(A, Opts.getOption(options::OPT_D), "_DEBUG");
+    DAL->AddJoinedArg(A, Opts.getOption(options::OPT_D), "_DLL");
+    break;
+  case options::OPT__SLASH_MD:
+    DAL->AddJoinedArg(A, Opts.getOption(options::OPT_D), "_DLL");
+    break;
+  case options::OPT__SLASH_MTd:
+    DAL->AddJoinedArg(A, Opts.getOption(options::OPT_D), "_DEBUG");
+    break;
+  case options::OPT__SLASH_MT:
+    break;
+  default:
+    return false;
+  }
+  // Hack: include a header that uses pragmas to auto-link the default CRT.
+  DAL->AddSeparateArg(A, Opts.getOption(options::OPT_include),
+                      TC->GetFilePath("include/msvcrt_picker.h"));
+  return true;
+}
+
+// Optimization aliases.  We can't alias these in tablegen because clang's -O
+// option is joined.
+static bool TranslateOptimizationFlag(const Arg *A, DerivedArgList *DAL,
+                                      const OptTable &Opts, unsigned OptId) {
+  const char *Alias;
+  switch (OptId) {
+  case options::OPT_Od:        Alias = "0"; break;
+  case options::OPT_Ot:        Alias = "2"; break;
+  case options::OPT_Ox:        Alias = "3"; break;
+  case options::OPT__SLASH_O:  Alias = A->getValue(); break;
+  default:
+    return false;
+  }
+  DAL->AddJoinedArg(A, Opts.getOption(options::OPT_O), Alias);
+  return true;
+}
+
+static bool TranslateWarningFlag(const Arg *A, DerivedArgList *DAL,
+                                 const OptTable &Opts, unsigned OptId) {
+  const char *Alias;
+  switch (OptId) {
+  case options::OPT__SLASH_W1:
+  case options::OPT__SLASH_W2:
+  case options::OPT__SLASH_W3:
+    // Just use -Wall, since that's a pretty good default.
+    Alias = "all";
+    break;
+  case options::OPT__SLASH_WX:
+    Alias = "error";
+    break;
+  case options::OPT__SLASH_WX_:
+    Alias = "no-error";
+    break;
+  default:
+    return false;
+  }
+  DAL->AddJoinedArg(A, Opts.getOption(options::OPT_O), Alias);
+  return true;
+}
+
+DerivedArgList *Windows::TranslateArgs(const DerivedArgList &Args,
+                                       const char *BoundArch) const {
+  // We could be using the windows toolchain without MSVC argument emulation.
+  if (!Args.hasArg(options::OPT_ccc_msvc))
+    return 0;
+
+  DerivedArgList *DAL = new DerivedArgList(Args.getBaseArgs());
+  const OptTable &Opts = getDriver().getOpts();
+
+  for (ArgList::const_iterator it = Args.begin(),
+         ie = Args.end(); it != ie; ++it) {
+    Arg *A = *it;
+    Option Opt = A->getOption();
+
+    // Pass through all non-MSVC args.
+    if (!Opt.hasFlag(options::MSVCOption)) {
+      DAL->append(A);
+      continue;
+    }
+
+    unsigned ID = Opt.getID();
+
+    // Re-parse escaped arguments
+    // FIXME: Should -Xclang-driver always go to the driver, even on
+    // non-Windows?
+    if (ID == options::OPT_Xclang_driver) {
+      unsigned Index = Args.getBaseArgs().MakeIndex(A->getValue());
+      unsigned Prev = Index;
+      Arg *NewArg = Opts.ParseOneArg(Args, Index);
+      if (!NewArg || Index > Prev + 1) {
+        // FIXME: Passing separated options with values to the driver is
+        // unsupported.  Fortunately, all known conflicts are for flag or joined
+        // style options.
+        getDriver().Diag(diag::err_drv_unknown_argument)
+          << A->getAsString(Args);
+      } else {
+        NewArg->setBaseArg(A);
+        DAL->append(NewArg);
+      }
+      continue;
+    }
+
+    if (TranslateMSVCRTFlag(this, A, DAL, Opts, ID))
+      continue;
+
+    if (TranslateOptimizationFlag(A, DAL, Opts, ID))
+      continue;
+
+    if (TranslateWarningFlag(A, DAL, Opts, ID))
+      continue;
+
+    // We may have this option in tablegen, but we can't yet translate it.
+    // Ignore it and leave it unclaimed so the driver warns.
+  }
+
+  return DAL;
+}
