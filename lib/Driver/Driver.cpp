@@ -83,9 +83,17 @@ Driver::~Driver() {
 
 InputArgList *Driver::ParseArgStrings(ArrayRef<const char *> ArgList) {
   llvm::PrettyStackTraceString CrashInfo("Command line argument parsing");
+
+  // -ccc-msvc has to be first, since it affects how we parse the rest of the
+  // arguments.
+  unsigned FlagsToExclude = options::MSVCOption;
+  if (!ArgList.empty() && StringRef(ArgList[0]) == "-ccc-msvc")
+    FlagsToExclude = 0;
+
   unsigned MissingArgIndex, MissingArgCount;
   InputArgList *Args = getOpts().ParseArgs(ArgList.begin(), ArgList.end(),
-                                           MissingArgIndex, MissingArgCount);
+                                           MissingArgIndex, MissingArgCount,
+                                           FlagsToExclude);
 
   // Check for missing argument error.
   if (MissingArgCount)
@@ -582,8 +590,9 @@ void Driver::PrintOptions(const ArgList &Args) const {
 
 void Driver::PrintHelp(bool ShowHidden) const {
   getOpts().PrintHelp(
-      llvm::outs(), Name.c_str(), DriverTitle.c_str(), /*Include*/ 0,
-      /*Exclude*/ options::NoDriverOption | (ShowHidden ? 0 : HelpHidden));
+      llvm::outs(), Name.c_str(), DriverTitle.c_str(), /*Include*/0,
+      /*Exclude*/options::NoDriverOption | options::MSVCOption |
+      (ShowHidden ? 0 : HelpHidden));
 }
 
 void Driver::PrintVersion(const Compilation &C, raw_ostream &OS) const {
@@ -636,6 +645,12 @@ bool Driver::HandleImmediateArgs(const Compilation &C) {
   if (C.getArgs().hasArg(options::OPT_help) ||
       C.getArgs().hasArg(options::OPT__help_hidden)) {
     PrintHelp(C.getArgs().hasArg(options::OPT__help_hidden));
+    return false;
+  }
+
+  if (C.getArgs().hasArg(options::OPT__QUESTION)) {
+    getOpts().PrintHelp(llvm::outs(), Name.c_str(), DriverTitle.c_str(),
+                        options::MSVCOption);
     return false;
   }
 

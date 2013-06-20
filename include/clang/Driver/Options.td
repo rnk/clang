@@ -97,8 +97,10 @@ def clang_ignored_m_Group : OptionGroup<"<clang ignored m group>">,
 // substitutions:
 //   _ => __
 //   - => _
+//   / => _SLASH_
 //   # => _HASH
 //   , => _COMMA
+//   ? => _QUESTION
 //   = => _EQ
 //   C++ => CXX
 //   . => _
@@ -114,6 +116,8 @@ def ccc_debug_Group : OptionGroup<"<clang debug/development internal options>">,
 class CCCDriverOpt : Group<ccc_driver_Group>, Flags<[DriverOption, HelpHidden]>;
 def ccc_cxx : Flag<["-"], "ccc-cxx">, CCCDriverOpt,
   HelpText<"Act as a C++ driver">;
+def ccc_msvc : Flag<["-"], "ccc-msvc">, CCCDriverOpt,
+  HelpText<"Act as Microsoft's cl.exe compiler.  Must be the first argument.">;
 def ccc_echo : Flag<["-"], "ccc-echo">, CCCDriverOpt,
   HelpText<"Echo commands before running them">;
 def ccc_gcc_name : Separate<["-"], "ccc-gcc-name">, CCCDriverOpt,
@@ -1306,3 +1310,5 @@ def Z_reserved_lib_cckext : Flag<["-"], "Z-reserved-lib-cckext">,
     Flags<[LinkerInput, NoArgumentUnused, Unsupported]>, Group<reserved_lib_Group>;
 
 include "CC1Options.td"
+
+include "MSVCOptions.td"

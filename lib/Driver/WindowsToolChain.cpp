@@ -340,3 +340,97 @@ void Windows::AddClangCXXStdlibIncludeArgs(const ArgList &DriverArgs,
                                            ArgStringList &CC1Args) const {
   // FIXME: There should probably be logic here to find libc++ on Windows.
 }
+
+static bool TranslateMSVCRTFlag(const ToolChain *TC, const Arg *A,
+                                DerivedArgList *DAL, const OptTable &Opts,
+                                unsigned OptId) {
+  switch (OptId) {
+  case options::OPT__SLASH_MDd:
+    DAL->AddJoinedArg(A, Opts.getOption(options::OPT_D), "_DEBUG");
+    DAL->AddJoinedArg(A, Opts.getOption(options::OPT_D), "_DLL");
+    break;
+  case options::OPT__SLASH_MD:
+    DAL->AddJoinedArg(A, Opts.getOption(options::OPT_D), "_DLL");
+    break;
+  case options::OPT__SLASH_MTd:
+    DAL->AddJoinedArg(A, Opts.getOption(options::OPT_D), "_DEBUG");
+    break;
+  case options::OPT__SLASH_MT:
+    break;
+  default:
+    return false;
+  }
+  // Hack: include a header that uses pragmas to auto-link the default CRT.
+  DAL->AddSeparateArg(A, Opts.getOption(options::OPT_include),
+                      TC->GetFilePath("include/msvcrt_picker.h"));
+  return true;
+}
+
+// Optimization aliases.  We can't alias these in tablegen because clang's -O
+// option is joined.
+static bool TranslateOptimizationFlag(const Arg *A, DerivedArgList *DAL,
+                                      const OptTable &Opts, unsigned OptId) {
+  const char *Alias;
+  switch (OptId) {
+  case options::OPT__SLASH_O1: Alias = "1"; break;
+  case options::OPT__SLASH_Os: Alias = "s"; break;
+  case options::OPT__SLASH_O2: Alias = "2"; break;
+  case options::OPT_Od:        Alias = "0"; break;
+  case options::OPT_Ot:        Alias = "2"; break;
+  case options::OPT_Ox:        Alias = "3"; break;
+  default:
+    return false;
+  }
+  DAL->AddJoinedArg(A, Opts.getOption(options::OPT_O), Alias);
+  return true;
+}
+
+DerivedArgList *Windows::TranslateArgs(const DerivedArgList &Args,
+                                       const char *BoundArch) const {
+  // We could be using the windows toolchain without MSVC argument emulation.
+  if (!Args.hasArg(options::OPT_ccc_msvc))
+    return 0;
+
+  DerivedArgList *DAL = new DerivedArgList(Args.getBaseArgs());
+  const OptTable &Opts = getDriver().getOpts();
+
+  for (ArgList::const_iterator it = Args.begin(),
+         ie = Args.end(); it != ie; ++it) {
+    Arg *A = *it;
+    Option Opt = A->getOption().getUnaliasedOption();
+
+    // Pass through all non-MSVC args.
+    if (!Opt.hasFlag(options::MSVCOption)) {
+      DAL->append(A);
+      continue;
+    }
+
+    if (TranslateMSVCRTFlag(this, A, DAL, Opts, Opt.getID()))
+      continue;
+
+    if (TranslateOptimizationFlag(A, DAL, Opts, Opt.getID()))
+      continue;
+
+    // Inlining control.
+    if (Opt.getID() == options::OPT_Ob) {
+      unsigned Level;
+      if (StringRef(A->getValue()).getAsInteger(10, Level)) {
+        getDriver().Diag(diag::err_drv_invalid_value)
+            << A->getAsString(Args) << A->getValue();
+        continue;
+      }
+      // /Ob0 disables inlining for non-alwaysinline functions.
+      if (Level == 0)
+        DAL->AddFlagArg(A, Opts.getOption(options::OPT_fno_inline_functions));
+      // /Ob1 is supposed to disable all un-hinted inlining, but we don't
+      // implement it.  /Ob2 is the normal inlining strategy.  In both cases, we
+      // do nothing and let the usual -O flags take effect.
+      continue;
+    }
+
+    // We may have this option in tablegen, but we can't yet translate it.
+    getDriver().Diag(diag::err_drv_unknown_argument) << A->getAsString(Args);
+  }
+
+  return DAL;
+}
