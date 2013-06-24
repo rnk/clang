@@ -43,6 +43,12 @@ class B : A {
   static int field;
 };
 
+class FieldShadow {
+  int field; // expected-note {{previous declaration is here}}
+  FieldShadow(int field) : field(field) { } // Don't warn, this works.
+  void foo(int field) { } // expected-warning {{declaration shadows a field of 'FieldShadow'}}
+};
+
 // rdar://8900456
 namespace rdar8900456 {
 struct Foo {

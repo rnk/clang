@@ -2244,9 +2244,10 @@ public:
                            CallExpr *CE, FunctionDecl *FD);
 
   /// Helpers for dealing with blocks and functions.
-  bool CheckParmsForFunctionDef(ParmVarDecl *const *Param,
-                                ParmVarDecl *const *ParamEnd,
-                                bool CheckParameterNames);
+  bool ActOnParamsForFunctionDef(DeclContext *DC, Scope *S,
+                                 ParmVarDecl *const *Param,
+                                 ParmVarDecl *const *ParamEnd,
+                                 bool CheckParameterNames);
   void CheckCXXDefaultArguments(FunctionDecl *FD);
   void CheckExtraCXXDefaultArguments(Declarator &D);
   Scope *getNonFieldDeclScope(Scope *S);

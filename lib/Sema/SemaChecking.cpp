@@ -5753,12 +5753,13 @@ void Sema::CheckBitFieldInitialization(SourceLocation InitLoc,
   (void) AnalyzeBitFieldAssignment(*this, BitField, Init, InitLoc);
 }
 
-/// CheckParmsForFunctionDef - Check that the parameters of the given
+/// ActOnParamsForFunctionDef - Check that the parameters of the given
 /// function are appropriate for the definition of a function. This
 /// takes care of any checks that cannot be performed on the
 /// declaration itself, e.g., that the types of each of the function
 /// parameters are complete.
-bool Sema::CheckParmsForFunctionDef(ParmVarDecl *const *P,
+bool Sema::ActOnParamsForFunctionDef(DeclContext *DC, Scope *S,
+                                    ParmVarDecl *const *P,
                                     ParmVarDecl *const *PEnd,
                                     bool CheckParameterNames) {
   bool HasInvalidParm = false;
@@ -5809,6 +5810,17 @@ bool Sema::CheckParmsForFunctionDef(ParmVarDecl *const *P,
       if (const RecordType *RT = Param->getType()->getAs<RecordType>())
         FinalizeVarWithDestructor(Param, RT);
     }
+
+#if 0
+    Param->setOwningFunction(DC);
+
+    // If this has an identifier, add it to the scope stack and check for
+    // shadowing.
+    if (S && Param->getIdentifier()) {
+      CheckShadow(S, Param);
+      PushOnScopeChains(Param, S);
+    }
+#endif
   }
 
   return HasInvalidParm;

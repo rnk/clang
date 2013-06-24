@@ -9928,33 +9928,17 @@ void Sema::ActOnBlockArguments(SourceLocation CaretLoc, Declarator &ParamInfo,
     }
   }
 
-  // Set the parameters on the block decl.
+  // Set the parameters on the block decl and put them in scope.
   if (!Params.empty()) {
     CurBlock->TheDecl->setParams(Params);
-    CheckParmsForFunctionDef(CurBlock->TheDecl->param_begin(),
-                             CurBlock->TheDecl->param_end(),
-                             /*CheckParameterNames=*/false);
+    ActOnParamsForFunctionDef(CurBlock->TheDecl, CurScope,
+                              CurBlock->TheDecl->param_begin(),
+                              CurBlock->TheDecl->param_end(),
+                              /*CheckParameterNames=*/ false);
   }
-  
+
   // Finally we can process decl attributes.
   ProcessDeclAttributes(CurScope, CurBlock->TheDecl, ParamInfo);
-
-  // Put the parameter variables in scope.  We can bail out immediately
-  // if we don't have any.
-  if (Params.empty())
-    return;
-
-  for (BlockDecl::param_iterator AI = CurBlock->TheDecl->param_begin(),
-         E = CurBlock->TheDecl->param_end(); AI != E; ++AI) {
-    (*AI)->setOwningFunction(CurBlock->TheDecl);
-
-    // If this has an identifier, add it to the scope stack.
-    if ((*AI)->getIdentifier()) {
-      CheckShadow(CurBlock->TheScope, *AI);
-
-      PushOnScopeChains(*AI, CurBlock->TheScope);
-    }
-  }
 }
 
 /// ActOnBlockError - If there is an error parsing a block, this callback

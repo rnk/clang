@@ -88,14 +88,13 @@ CXXMethodDecl *Sema::startLambdaDefinition(CXXRecordDecl *Class,
   // Add parameters.
   if (!Params.empty()) {
     Method->setParams(Params);
-    CheckParmsForFunctionDef(const_cast<ParmVarDecl **>(Params.begin()),
-                             const_cast<ParmVarDecl **>(Params.end()),
-                             /*CheckParameterNames=*/false);
-    
-    for (CXXMethodDecl::param_iterator P = Method->param_begin(), 
-                                    PEnd = Method->param_end();
-         P != PEnd; ++P)
-      (*P)->setOwningFunction(Method);
+
+    // Don't add the parameters to the current scope yet.  We have to add
+    // captured identifiers to the scope first, and then we check the
+    // parameters.
+    ActOnParamsForFunctionDef(Method, /*Scope=*/ 0, Params.begin(),
+                              Params.end(),
+                              /*CheckParameterNames=*/ false);
   }
 
   // Allocate a mangling number for this lambda expression, if the ABI

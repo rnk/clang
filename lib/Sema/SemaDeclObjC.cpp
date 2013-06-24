@@ -325,21 +325,18 @@ void Sema::ActOnStartOfObjCMethodDef(Scope *FnBodyScope, Decl *D) {
   PushOnScopeChains(MDecl->getCmdDecl(), FnBodyScope);
 
   // The ObjC parser requires parameter names so there's no need to check.
-  CheckParmsForFunctionDef(MDecl->param_begin(), MDecl->param_end(),
-                           /*CheckParameterNames=*/false);
+  ActOnParamsForFunctionDef(MDecl, FnBodyScope, MDecl->param_begin(),
+                            MDecl->param_end(),
+                            /*CheckParameterNames=*/ false);
 
-  // Introduce all of the other parameters into this scope.
-  for (ObjCMethodDecl::param_iterator PI = MDecl->param_begin(),
-       E = MDecl->param_end(); PI != E; ++PI) {
-    ParmVarDecl *Param = (*PI);
-    if (!Param->isInvalidDecl() &&
-        getLangOpts().ObjCAutoRefCount &&
-        !HasExplicitOwnershipAttr(*this, Param))
-      Diag(Param->getLocation(), diag::warn_arc_strong_pointer_objc_pointer) <<
-            Param->getType();
-    
-    if ((*PI)->getIdentifier())
-      PushOnScopeChains(*PI, FnBodyScope);
+  if (getLangOpts().ObjCAutoRefCount) {
+    for (ObjCMethodDecl::param_iterator PI = MDecl->param_begin(),
+         E = MDecl->param_end(); PI != E; ++PI) {
+      ParmVarDecl *Param = (*PI);
+      if (!Param->isInvalidDecl() && !HasExplicitOwnershipAttr(*this, Param))
+        Diag(Param->getLocation(), diag::warn_arc_strong_pointer_objc_pointer) <<
+              Param->getType();
+    }
   }
 
   // In ARC, disallow definition of retain/release/autorelease/retainCount
