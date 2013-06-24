@@ -296,6 +296,10 @@ static void ParseProgName(SmallVectorImpl<const char *> &ArgVector,
     { "++", true, false },
   };
   std::string ProgName(llvm::sys::path::stem(ArgVector[0]));
+#ifdef LLVM_ON_WIN32
+  // Windows paths are case insensitive.
+  std::transform(ProgName.begin(), ProgName.end(), ProgName.begin(), ::tolower);
+#endif
   StringRef ProgNameRef(ProgName);
   StringRef Prefix;
 
@@ -314,10 +318,10 @@ static void ParseProgName(SmallVectorImpl<const char *> &ArgVector,
       }
     }
 
-    // If we were invoked as clang-cl, add the flag that makes us accept MSVC
+    // If we were invoked as cl.exe, add the flag that makes us accept MSVC
     // arguments.
-    if (ProgNameRef.endswith("clang-cl"))
-      ArgVector.insert(&ArgVector[1], "-ccc-msvc");
+    if (ProgNameRef.endswith("cl"))
+      ArgVector.insert(ArgVector.begin() + 1, "-ccc-msvc");
 
     if (FoundMatch) {
       StringRef::size_type LastComponent = ProgNameRef.rfind('-',
@@ -357,7 +361,7 @@ int main(int argc_, const char **argv_) {
   ExpandArgv(argc_, argv_, argv, SavedStrings);
 
   // Handle -cc1 integrated tools.
-  if (argv.size() > 1 && StringRef(argv[1]).startswith("-cc1")) {
+  if (argv.size() > 2 && StringRef(argv[1]).startswith("-cc1")) {
     StringRef Tool = argv[1] + 4;
 
     if (Tool == "")

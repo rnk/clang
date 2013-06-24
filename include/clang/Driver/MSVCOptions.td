@@ -11,22 +11,15 @@
 //
 //===----------------------------------------------------------------------===//
 
-def msvc_driver_Group : OptionGroup<"<clang driver internal options>">,
-  HelpText<"clang-cl options">;
-class MSVCDriverOpt : Group<msvc_driver_Group>, Flags<[MSVCOption, DriverOption]>;
-
 // Define special MSVC option kinds with higher precedence (-1) than the normal
 // options.  If there is a conflict on the command line, it can be resolved by
 // escaping it with -Xclang.
 // FIXME: Add some new escape to let the driver interpret it?
 
-def KIND_MSVC_FLAG : OptionKind<"Flag", -1>;
-def KIND_MSVC_JOINED : OptionKind<"Joined", -1>;
-
-class MSVCFlag<string name> : Option<["/", "-"], name, KIND_MSVC_FLAG>, MSVCDriverOpt;
-class MSVCJoined<string name> : Option<["/", "-"], name, KIND_MSVC_JOINED>, MSVCDriverOpt;
-
-// So far we haven't needed Separate or the other kinds of flags.
+class MSVCFlag<string name> : Option<["/", "-"], name, KIND_FLAG>;
+class MSVCJoined<string name> : Option<["/", "-"], name, KIND_JOINED>;
+class MSVCJoinedOrSeparate<string name> :
+    Option<["/", "-"], name, KIND_JOINED_OR_SEPARATE>;
 
 // MSVC compatible options.  These are only enabled when clang is invoked as
 // clang-cl, or when it is passed -ccc-msvc.  Always put the "/" prefix first so
@@ -38,6 +31,8 @@ def _QUESTION : MSVCFlag<"?">,
   HelpText<"Print help for MSVC options">;
 def showIncludes : MSVCFlag<"showIncludes">,
   HelpText<"Print include paths to stdout">;
+def Fo : MSVCJoined<"Fo">,
+  HelpText<"Output file or directory for multiple source files">;
 
 // We can't accept -MD or -MT since they are already used for depfiles.  Even
 // though -MDd and -MTd don't conflict, don't accept them for consistency.
@@ -48,16 +43,12 @@ def _SLASH_MTd : MSVCFlag<"MTd">, HelpText<"Use the static, debug Visual C runti
 
 // Optimization aliases.  We can't alias these because -O is joined and these
 // are not.
-def _SLASH_O1 : MSVCFlag<"O1">,
-  HelpText<"Enables optimizations that run quickly">;
+def _SLASH_O : MSVCJoined<"O">, Alias<O>,
+  HelpText<"Optimization level">;
 def Ob : MSVCJoined<"Ob">,
   HelpText<"inlining: /Ob0 is off, /Ob1 or greater is on">;
-def _SLASH_Os : MSVCFlag<"Os">,
-  HelpText<"Optimize for small code size">;
 def Ox : MSVCFlag<"Ox">,
   HelpText<"Maximum optimizations (-O3)">;
-def _SLASH_O2 : MSVCFlag<"O2">,
-  HelpText<"Optimize for speed">;
 def Od : MSVCFlag<"Od">,
   HelpText<"Disable optimizations">;
 def Ot : MSVCFlag<"Ot">,
@@ -73,5 +64,39 @@ def Oy_ : MSVCFlag<"Oy-">, Alias<fno_omit_frame_pointer>,
 // Language options.  These should mostly be aliases.
 def GR : MSVCFlag<"GR">, Alias<frtti>, HelpText<"Enable RTTI">;
 def GR_ : MSVCFlag<"GR-">, Alias<fno_rtti>, HelpText<"Disable RTTI">;
+
+// Simple aliases.
+def _SLASH_c : MSVCFlag<"c">, Alias<c>;
+def _SLASH_I : MSVCJoined<"I">, Alias<I>;
+def _SLASH_D : MSVCJoinedOrSeparate<"D">, Alias<D>;
+def _SLASH_U : MSVCJoinedOrSeparate<"U">, Alias<U>;
+def _SLASH_W1 : MSVCFlag<"W1">;    // -Wall
+def _SLASH_W2 : MSVCFlag<"W2">;    // -Wall
+def _SLASH_W3 : MSVCFlag<"W3">;    // -Wall
+def _SLASH_WX : MSVCFlag<"WX">;    // -Werror
+def _SLASH_WX_ : MSVCFlag<"WX-">;  // -Wno-error
+
+// Compatibility no-ops.
+
+def nologo : MSVCFlag<"nologo">;
+def analyze_ : MSVCFlag<"analyze-">;
+
+// Unsupported
+
+def Zi : MSVCFlag<"Zi">, Alias<I>;
+def Zc_ : MSVCJoined<"Zc:">;
+def fp_ : MSVCJoined<"fp:">;
+def Fd : MSVCJoined<"Fd">;
+def GS : MSVCFlag<"GS">;
+def EH : MSVCJoined<"EH">;
+def Gd : MSVCFlag<"Gd">;
+def Gz : MSVCFlag<"Gz">;
+def Gr : MSVCFlag<"Gr">;
+def Gm : MSVCFlag<"Gm">;
+def Gm_ : MSVCFlag<"Gm-">;
+def GZ : MSVCFlag<"GZ">;
+def RTC : MSVCJoined<"RTC">;
+def TP : MSVCFlag<"TP">, HelpText<"Compile all files as C++">;
+def errorReport_ : MSVCJoined<"errorReport:">;
 
 } // let Flags = [MSVCOption, DriverOption]

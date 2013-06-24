@@ -372,12 +372,33 @@ static bool TranslateOptimizationFlag(const Arg *A, DerivedArgList *DAL,
                                       const OptTable &Opts, unsigned OptId) {
   const char *Alias;
   switch (OptId) {
-  case options::OPT__SLASH_O1: Alias = "1"; break;
-  case options::OPT__SLASH_Os: Alias = "s"; break;
-  case options::OPT__SLASH_O2: Alias = "2"; break;
   case options::OPT_Od:        Alias = "0"; break;
   case options::OPT_Ot:        Alias = "2"; break;
   case options::OPT_Ox:        Alias = "3"; break;
+  case options::OPT__SLASH_O:  Alias = A->getValue(); break;
+  default:
+    return false;
+  }
+  DAL->AddJoinedArg(A, Opts.getOption(options::OPT_O), Alias);
+  return true;
+}
+
+static bool TranslateWarningFlag(const Arg *A, DerivedArgList *DAL,
+                                 const OptTable &Opts, unsigned OptId) {
+  const char *Alias;
+  switch (OptId) {
+  case options::OPT__SLASH_W1:
+  case options::OPT__SLASH_W2:
+  case options::OPT__SLASH_W3:
+    // Just use -Wall, since that's a pretty good default.
+    Alias = "all";
+    break;
+  case options::OPT__SLASH_WX:
+    Alias = "error";
+    break;
+  case options::OPT__SLASH_WX_:
+    Alias = "no-error";
+    break;
   default:
     return false;
   }
@@ -409,6 +430,9 @@ DerivedArgList *Windows::TranslateArgs(const DerivedArgList &Args,
       continue;
 
     if (TranslateOptimizationFlag(A, DAL, Opts, Opt.getID()))
+      continue;
+
+    if (TranslateWarningFlag(A, DAL, Opts, Opt.getID()))
       continue;
 
     // Inlining control.
