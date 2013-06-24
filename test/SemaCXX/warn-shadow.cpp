@@ -44,8 +44,8 @@ class B : A {
 };
 
 class FieldShadow {
-  int field; // expected-note {{previous declaration is here}}
-  FieldShadow(int field) : field(field) { } // Don't warn, this works.
+  int field; // expected-note 2{{previous declaration is here}}
+  FieldShadow(int field) : field(field) { } // expected-warning {{declaration shadows a field of 'FieldShadow'}}
   void foo(int field) { } // expected-warning {{declaration shadows a field of 'FieldShadow'}}
 };
 

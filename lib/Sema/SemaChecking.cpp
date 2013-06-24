@@ -5811,7 +5811,6 @@ bool Sema::ActOnParamsForFunctionDef(DeclContext *DC, Scope *S,
         FinalizeVarWithDestructor(Param, RT);
     }
 
-#if 0
     Param->setOwningFunction(DC);
 
     // If this has an identifier, add it to the scope stack and check for
@@ -5820,7 +5819,6 @@ bool Sema::ActOnParamsForFunctionDef(DeclContext *DC, Scope *S,
       CheckShadow(S, Param);
       PushOnScopeChains(Param, S);
     }
-#endif
   }
 
   return HasInvalidParm;

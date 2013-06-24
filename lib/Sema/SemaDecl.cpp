@@ -8751,24 +8751,8 @@ Decl *Sema::ActOnStartOfFunctionDef(Scope *FnBodyScope, Decl *D) {
 
   // Check the validity of our function parameters and introduce them into the
   // function scope.
-  if (isa<CXXConstructorDecl>(FD)) {
-    llvm::errs() << *FD << '\n';
-  }
-  ActOnParamsForFunctionDef(FD, 0, FD->param_begin(), FD->param_end(),
+  ActOnParamsForFunctionDef(FD, FnBodyScope, FD->param_begin(), FD->param_end(),
                             /*CheckParameterNames=*/ true);
-
-#if 1
-  // Introduce our parameters into the function scope
-  for (unsigned p = 0, NumParams = FD->getNumParams(); p < NumParams; ++p) {
-    ParmVarDecl *Param = FD->getParamDecl(p);
-    Param->setOwningFunction(FD);
-    // If this has an identifier, add it to the scope stack.
-    if (Param->getIdentifier() && FnBodyScope) {
-      CheckShadow(FnBodyScope, Param);
-      PushOnScopeChains(Param, FnBodyScope);
-    }
-  }
-#endif
 
   // If we had any tags defined in the function prototype,
   // introduce them into the function scope.
