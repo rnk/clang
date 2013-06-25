@@ -113,8 +113,6 @@ InputArgList *Driver::ParseMSVCArgs(ArrayRef<const char *> ArgList,
       break;
     }
 
-    llvm::errs() << A->getOption().getName() << '\n';
-
     Args->append(A);
     Index = Next;
   }

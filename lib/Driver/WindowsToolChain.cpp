@@ -453,7 +453,7 @@ DerivedArgList *Windows::TranslateArgs(const DerivedArgList &Args,
     }
 
     // We may have this option in tablegen, but we can't yet translate it.
-    getDriver().Diag(diag::err_drv_unknown_argument) << A->getAsString(Args);
+    // Ignore it and leave it unclaimed so the driver warns.
   }
 
   return DAL;
