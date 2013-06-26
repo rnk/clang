@@ -13,7 +13,7 @@
 
 // Define special MSVC option kinds with higher precedence (-1) than the normal
 // options.  If there is a conflict on the command line, it can be resolved by
-// escaping it with -Xclang.
+// escaping it with -Xclang or -Xclang-driver.
 // FIXME: Add some new escape to let the driver interpret it?
 
 class MSVCFlag<string name> : Option<["/", "-"], name, KIND_FLAG>;
@@ -24,6 +24,12 @@ class MSVCJoinedOrSeparate<string name> :
 // MSVC compatible options.  These are only enabled when clang is invoked as
 // clang-cl, or when it is passed -ccc-msvc.  Always put the "/" prefix first so
 // the help text renders with it.
+
+// Escape for any gcc-style driver options that conflict with MSVC options,
+// such as -MD.
+// FIXME: Should -Xclang-driver always go to the driver, even on non-Windows?
+// If so, remove the MSVCOption flag.
+def Xclang_driver : Separate<["-"], "Xclang-driver">, Flags<[MSVCOption]>;
 
 let Flags = [MSVCOption, DriverOption] in {
 

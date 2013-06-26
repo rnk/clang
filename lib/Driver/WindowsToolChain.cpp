@@ -418,7 +418,7 @@ DerivedArgList *Windows::TranslateArgs(const DerivedArgList &Args,
   for (ArgList::const_iterator it = Args.begin(),
          ie = Args.end(); it != ie; ++it) {
     Arg *A = *it;
-    Option Opt = A->getOption().getUnaliasedOption();
+    Option Opt = A->getOption();
 
     // Pass through all non-MSVC args.
     if (!Opt.hasFlag(options::MSVCOption)) {
@@ -426,7 +426,27 @@ DerivedArgList *Windows::TranslateArgs(const DerivedArgList &Args,
       continue;
     }
 
-    options::ID ID = Opt.getID();
+    unsigned ID = Opt.getID();
+
+    // Re-parse escaped arguments
+    // FIXME: Should -Xclang-driver always go to the driver, even on
+    // non-Windows?
+    if (ID == options::OPT_Xclang_driver) {
+      unsigned Index = Args.getBaseArgs().MakeIndex(A->getValue());
+      unsigned Prev = Index;
+      Arg *NewArg = Opts.ParseOneArg(Args, Index);
+      if (!NewArg || Index > Prev + 1) {
+        // FIXME: Passing separated options with values to the driver is
+        // unsupported.  Fortunately, all known conflicts are for flag or joined
+        // style options.
+        getDriver().Diag(diag::err_drv_unknown_argument)
+          << A->getAsString(Args);
+      } else {
+        NewArg->setBaseArg(A);
+        DAL->append(NewArg);
+      }
+      continue;
+    }
 
     if (TranslateMSVCRTFlag(this, A, DAL, Opts, ID))
       continue;

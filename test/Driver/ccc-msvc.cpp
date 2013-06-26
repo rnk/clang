@@ -15,4 +15,12 @@
 // RUN: %clang /Od /GR- /MDd -c %s -### 2>&1 | FileCheck -check-prefix=NOTMSVC %s
 // NOTMSVC: error: no such file or directory: '/Od'
 // NOTMSVC: error: no such file or directory: '/GR-'
-// NOTMSVC: error: no such file or directory: '/MDd'
+
+// Test escaping with -Xclang-driver.
+//
+// RUN: %clang -ccc-msvc -MD -c %s -### 2>&1 | FileCheck -check-prefix=MDMSVC %s
+// MDMSVC-DAG: "-D" "_DLL"
+// MDMSVC-DAG: "-include" "{{.*}}msvcrt_picker.h"
+// RUN: %clang -ccc-msvc -Xclang-driver -MD -c %s -### 2>&1 | FileCheck -check-prefix=MDGCC %s
+// MDGCC-NOT: Xclang-driver
+// MDGCC: "-dependency-file"
