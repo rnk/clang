@@ -426,31 +426,16 @@ DerivedArgList *Windows::TranslateArgs(const DerivedArgList &Args,
       continue;
     }
 
-    if (TranslateMSVCRTFlag(this, A, DAL, Opts, Opt.getID()))
+    options::ID ID = Opt.getID();
+
+    if (TranslateMSVCRTFlag(this, A, DAL, Opts, ID))
       continue;
 
-    if (TranslateOptimizationFlag(A, DAL, Opts, Opt.getID()))
+    if (TranslateOptimizationFlag(A, DAL, Opts, ID))
       continue;
 
-    if (TranslateWarningFlag(A, DAL, Opts, Opt.getID()))
+    if (TranslateWarningFlag(A, DAL, Opts, ID))
       continue;
-
-    // Inlining control.
-    if (Opt.getID() == options::OPT_Ob) {
-      unsigned Level;
-      if (StringRef(A->getValue()).getAsInteger(10, Level)) {
-        getDriver().Diag(diag::err_drv_invalid_value)
-            << A->getAsString(Args) << A->getValue();
-        continue;
-      }
-      // /Ob0 disables inlining for non-alwaysinline functions.
-      if (Level == 0)
-        DAL->AddFlagArg(A, Opts.getOption(options::OPT_fno_inline_functions));
-      // /Ob1 is supposed to disable all un-hinted inlining, but we don't
-      // implement it.  /Ob2 is the normal inlining strategy.  In both cases, we
-      // do nothing and let the usual -O flags take effect.
-      continue;
-    }
 
     // We may have this option in tablegen, but we can't yet translate it.
     // Ignore it and leave it unclaimed so the driver warns.

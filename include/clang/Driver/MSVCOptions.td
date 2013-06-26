@@ -41,12 +41,14 @@ def _SLASH_MT  : MSVCFlag<"MT">,  HelpText<"Use the static, release Visual C run
 def _SLASH_MDd : MSVCFlag<"MDd">, HelpText<"Use the dynamic, debug Visual C runtime">;
 def _SLASH_MTd : MSVCFlag<"MTd">, HelpText<"Use the static, debug Visual C runtime">;
 
-// Optimization aliases.  We can't alias these because -O is joined and these
-// are not.
+// Optimization aliases.  We can't alias many of these because -O is joined and
+// these are not.
 def _SLASH_O : MSVCJoined<"O">, Alias<O>,
   HelpText<"Optimization level">;
+def Ob0 : MSVCFlag<"Ob0">, Alias<fno_inline_functions>,
+  HelpText<"Disables all inlining aside from __forceinline">;
 def Ob : MSVCJoined<"Ob">,
-  HelpText<"inlining: /Ob0 is off, /Ob1 or greater is on">;
+  HelpText<"Controls inlining, unsupported">;
 def Ox : MSVCFlag<"Ox">,
   HelpText<"Maximum optimizations (-O3)">;
 def Od : MSVCFlag<"Od">,
@@ -83,7 +85,7 @@ def analyze_ : MSVCFlag<"analyze-">;
 
 // Unsupported
 
-def Zi : MSVCFlag<"Zi">, Alias<I>;
+def Zi : MSVCFlag<"Zi">;
 def Zc_ : MSVCJoined<"Zc:">;
 def fp_ : MSVCJoined<"fp:">;
 def Fd : MSVCJoined<"Fd">;
@@ -97,6 +99,7 @@ def Gm_ : MSVCFlag<"Gm-">;
 def GZ : MSVCFlag<"GZ">;
 def RTC : MSVCJoined<"RTC">;
 def TP : MSVCFlag<"TP">, HelpText<"Compile all files as C++">;
+def TC : MSVCFlag<"TC">, HelpText<"Compile all files as C">;
 def errorReport_ : MSVCJoined<"errorReport:">;
 
 } // let Flags = [MSVCOption, DriverOption]

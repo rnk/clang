@@ -40,12 +40,12 @@
 #include "llvm/Support/Program.h"
 #include "llvm/Support/Regex.h"
 #include "llvm/Support/Signals.h"
+#include "llvm/Support/SwapByteOrder.h"
 #include "llvm/Support/TargetRegistry.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/Timer.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/system_error.h"
-#include <windows.h>
 using namespace clang;
 using namespace clang::driver;
 using namespace llvm::opt;
@@ -188,53 +188,70 @@ static void ApplyQAOverride(SmallVectorImpl<const char*> &Args,
 
 /// Convert a UTF16 MemoryBuffer to a UTF8 std::string.
 /// FIXME: Put this in libSupport.
-static bool convertUTF16MemBufToUTF8String(llvm::MemoryBuffer *MemBuf,
+static bool convertUTF16MemBufToUTF8String(const llvm::MemoryBuffer &MemBuf,
                                            std::string &OutBuf) {
   // UTF-16 buffers cannot be an odd number of bytes.
-  if (uintptr_t(MemBuf.getBufferSize()) % 2)
+  if (MemBuf.getBufferSize() % 2)
     return false;
+
+  llvm::errs() << getenv("PATH") << '\n';
 
   // The UTF conversion code doesn't handle BOMs or endianness, so do that now.
   const UTF16 *Src = reinterpret_cast<const UTF16 *>(MemBuf.getBufferStart());
   const UTF16 *SrcEnd = reinterpret_cast<const UTF16 *>(MemBuf.getBufferEnd());
+#if 0
   std::vector<UTF16> Swapped;
+#endif
   if (Src[0] == 0xFFFE) {
     // Native endian BOM.  Skip it.
     ++Src;
   } else if (Src[0] == 0xFEFF) {
     // Byteswapped BOM.  Byteswap the whole buffer and skip the BOM.
     ++Src;
+#if 0
     for (; Src != SrcEnd; ++Src)
-      Swapped.push_back(SwapByteOrder_16(*Src));
-    Src = Swapped.begin();
-    SrcEnd = Swapped.end();
+      Swapped.push_back(llvm::sys::SwapByteOrder_16(*Src));
+    if (Swapped.empty())
+      return true;  // Empty input means empty output.
+    Src = &Swapped[0];
+    SrcEnd = &Swapped[Swapped.size()];
+#endif
   }
 
   // In the common case, the majority of the code points will be < 127.
   // Optimize our initial guess for that.
-  OutBuf.reserve(MemBuf.getBufferSize() / 2 + 256);
+  OutBuf.resize(MemBuf.getBufferSize() / 2 + 256);
+  llvm::errs() << "size " << OutBuf.size() << '\n';
   UTF8 *Dst = reinterpret_cast<UTF8 *>(&OutBuf[0]);
-  UTF8 *DstEnd = reinterpret_cast<UTF8 *>(OutBuf.end());
-  ConverstionResult Res =
+  UTF8 *DstEnd = reinterpret_cast<UTF8 *>(&OutBuf[OutBuf.size()]);
+  llvm::errs() << "Src " << (void*)Src << '\n';
+  llvm::errs() << "Dst " << (void*)Dst << '\n';
+  ConversionResult Res =
       ConvertUTF16toUTF8(&Src, SrcEnd, &Dst, DstEnd, strictConversion);
+
+  llvm::errs() << "Src " << (void*)Src << '\n';
+  llvm::errs() << "Dst " << (void*)Dst << '\n';
+  llvm::errs() << "OutBuf " << OutBuf << '\n';
 
   if (Res == targetExhausted) {
     // In the uncommon case that we has lots of funky code points, just burn
     // memory and overallocate.  Take care that resizing the buffer invalidates
     // our pointers.
     size_t SoFar = Dst - reinterpret_cast<UTF8 *>(&OutBuf[0]);
+    llvm::errs() << "SoFar " << SoFar << '\n';
     size_t OverEstimate =
         ((MemBuf.getBufferSize() / 2) * UNI_MAX_UTF8_BYTES_PER_CODE_POINT);
     assert(OverEstimate > OutBuf.size());
-    OutBuf.reserve(OverEstimate);
+    OutBuf.resize(OverEstimate);
     Dst = reinterpret_cast<UTF8 *>(&OutBuf[SoFar]);
-    DstEnd = reinterpret_cast<UTF8 *>(OutBuf.end());
+    DstEnd = reinterpret_cast<UTF8 *>(&OutBuf[OutBuf.size()]);
     Res = ConvertUTF16toUTF8(&Src, SrcEnd, &Dst, DstEnd, strictConversion);
+    llvm::errs() << "Res " << Res << '\n';
     assert(Res != targetExhausted && "overallocation wasn't enough");
   }
 
   // Any other cause for failure is the user's fault.
-  return Res != conversionOK;
+  return Res == conversionOK;
 }
 
 extern int cc1_main(const char **ArgBegin, const char **ArgEnd,
@@ -259,13 +276,15 @@ static void ExpandArgsFromBuf(const char *Arg,
   // MSBuild uses a UTF-16 response file with a BOM.  Convert such files to
   // UTF-8 for simplicity.
   std::string Utf8Buf;
-  if ((Buf[0] == 0xFF && Buf[1] == 0xFE) ||
-      (Buf[0] == 0xFE && Buf[1] == 0xFF)) {
-    if (!convertUTF16MemBufToUTF8String(MemBuf.get(), Utf8Buf)) {
+  if ((Buf[0] == '\xFF' && Buf[1] == '\xFE') ||
+      (Buf[0] == '\xFE' && Buf[1] == '\xFF')) {
+    if (!convertUTF16MemBufToUTF8String(*MemBuf.get(), Utf8Buf)) {
       // FIXME: Give the user a real diagnostic here and above.
       ArgVector.push_back(SaveStringInSet(SavedStrings, Arg));
       return;
     }
+    llvm::errs() << "Utf8Buf " << Utf8Buf << '\n';
+    Buf = Utf8Buf.c_str();
   }
 
   for (const char *P = Buf; ; ++P) {
@@ -419,8 +438,6 @@ static void ParseProgName(SmallVectorImpl<const char *> &ArgVector,
 int main(int argc_, const char **argv_) {
   llvm::sys::PrintStackTraceOnErrorSignal();
   llvm::PrettyStackTraceProgram X(argc_, argv_);
-
-  llvm::errs() << GetCommandLine() << '\n';
 
   std::set<std::string> SavedStrings;
   SmallVector<const char*, 256> argv;
