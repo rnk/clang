@@ -1266,15 +1266,21 @@ void CodeGenFunction::EmitDestructorBody(FunctionArgList &Args) {
   // the epilogue will destruct the virtual bases.  But we can't do
   // this optimization if the body is a function-try-block, because
   // we'd introduce *two* handler blocks.
+  // XXX: In the Microsoft ABI, we want to emit a delegating complete dtor
+  // without a definition, which means we won't be able to tell if the
+  // definition is a try body.  In this case, MSVC simply delegates, so we do
+  // the same.
   switch (DtorType) {
   case Dtor_Deleting: llvm_unreachable("already handled deleting case");
 
   case Dtor_Complete:
+    assert((Body || getTarget().getCXXABI().isMicrosoft()) &&
+           "can't emit a dtor without a body for non-Microsoft ABIs");
+
     // Enter the cleanup scopes for virtual bases.
     EnterDtorCleanups(Dtor, Dtor_Complete);
 
-    if (!isTryBody &&
-        CGM.getTarget().getCXXABI().hasDestructorVariants()) {
+    if (!isTryBody) {
       EmitCXXDestructorCall(Dtor, Dtor_Base, /*ForVirtualBase=*/false,
                             /*Delegating=*/false, LoadCXXThis());
       break;
@@ -1282,6 +1288,8 @@ void CodeGenFunction::EmitDestructorBody(FunctionArgList &Args) {
     // Fallthrough: act like we're in the base variant.
       
   case Dtor_Base:
+    assert(Body);
+
     // Enter the cleanup scopes for fields and non-virtual bases.
     EnterDtorCleanups(Dtor, Dtor_Base);
 

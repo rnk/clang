@@ -152,10 +152,10 @@ public:
     return isItaniumFamily();
   }
 
-  /// \brief Does this ABI have different entrypoints for complete-object
-  /// and base-subobject destructors?
-  bool hasDestructorVariants() const {
-    return isItaniumFamily();
+  /// \brief Does this ABI treat destructor variants as linkonce thunks that
+  /// delegate towards the base destructor?
+  bool hasLinkOnceDestructorVariants() const {
+    return isMicrosoft();
   }
 
   /// \brief Does this ABI allow virtual bases to be primary base classes?

@@ -37,6 +37,13 @@ public:
     return !RD->isPOD();
   }
 
+  bool useThunkForDtorVariant(CXXDtorType DT) const {
+    // In the MS ABI, non-base dtors are always linkonce_odr thunks that
+    // delegate to each other, bottoming out with the base dtor, which might be
+    // external to the current TU.
+    return DT != Dtor_Base;
+  }
+
   RecordArgABI getRecordArgABI(const CXXRecordDecl *RD) const {
     if (RD->hasNonTrivialCopyConstructor() || RD->hasNonTrivialDestructor())
       return RAA_DirectInMemory;

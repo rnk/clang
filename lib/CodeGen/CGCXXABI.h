@@ -108,6 +108,11 @@ public:
   /// Returns true if the given record type should be returned indirectly.
   virtual bool isReturnTypeIndirect(const CXXRecordDecl *RD) const = 0;
 
+  /// Returns true if the given destructor type should be emitted as a linkonce
+  /// delegating thunk, regardless of whether the dtor is defined in this TU or
+  /// not.
+  virtual bool useThunkForDtorVariant(CXXDtorType DT) const = 0;
+
   /// Specify how one should pass an argument of a record type.
   enum RecordArgABI {
     /// Pass it using the normal C aggregate rules for the ABI, potentially

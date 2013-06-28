@@ -752,7 +752,8 @@ public:
   /// given type.
   llvm::GlobalValue *GetAddrOfCXXDestructor(const CXXDestructorDecl *dtor,
                                             CXXDtorType dtorType,
-                                            const CGFunctionInfo *fnInfo = 0);
+                                            const CGFunctionInfo *fnInfo = 0,
+                                            llvm::FunctionType *fnType = 0);
 
   /// getBuiltinLibFunction - Given a builtin id for a function like
   /// "__builtin_fabsf", return a Function* for "fabsf".
@@ -1111,7 +1112,7 @@ private:
   /// MayDeferGeneration - Determine if the given decl can be emitted
   /// lazily; this is only relevant for definitions. The given decl
   /// must be either a function or var decl.
-  bool MayDeferGeneration(const ValueDecl *D);
+  bool MayDeferGeneration(GlobalDecl GD);
 
   /// SimplifyPersonality - Check whether we can use a "simpler", more
   /// core exceptions personality function.

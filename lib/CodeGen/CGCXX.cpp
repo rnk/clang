@@ -277,16 +277,26 @@ void CodeGenModule::EmitCXXDestructor(const CXXDestructorDecl *dtor,
 llvm::GlobalValue *
 CodeGenModule::GetAddrOfCXXDestructor(const CXXDestructorDecl *dtor,
                                       CXXDtorType dtorType,
-                                      const CGFunctionInfo *fnInfo) {
+                                      const CGFunctionInfo *fnInfo,
+                                      llvm::FunctionType *fnType) {
+  // If the class has no virtual bases, then the complete and base destructors
+  // are equivalent, for all C++ ABIs supported by clang.  We can save on code
+  // size by calling the base dtor directly.
+  // XXX: We could do this for Itanium, but we should consult with John first.
+  if (getTarget().getCXXABI().isMicrosoft() && dtorType == Dtor_Complete &&
+      dtor->getParent()->getNumVBases() == 0)
+    dtorType = Dtor_Base;
+
   GlobalDecl GD(dtor, dtorType);
 
   StringRef name = getMangledName(GD);
   if (llvm::GlobalValue *existing = GetGlobalValue(name))
     return existing;
 
-  if (!fnInfo) fnInfo = &getTypes().arrangeCXXDestructor(dtor, dtorType);
-
-  llvm::FunctionType *fnType = getTypes().GetFunctionType(*fnInfo);
+  if (!fnType) {
+    if (!fnInfo) fnInfo = &getTypes().arrangeCXXDestructor(dtor, dtorType);
+    fnType = getTypes().GetFunctionType(*fnInfo);
+  }
   return cast<llvm::Function>(GetOrCreateLLVMFunction(name, fnType, GD,
                                                       /*ForVTable=*/false));
 }

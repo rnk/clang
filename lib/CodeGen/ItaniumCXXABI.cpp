@@ -47,6 +47,13 @@ public:
     return !RD->hasTrivialDestructor() || RD->hasNonTrivialCopyConstructor();
   }
 
+  bool useThunkForDtorVariant(CXXDtorType DT) const {
+    // Itanium does not emit any destructor variant as an inline thunk.
+    // Delegating may occur as an optimization, but all variants are either
+    // emitted with external linkage or as linkonce if they are inline and used.
+    return false;
+  }
+
   RecordArgABI getRecordArgABI(const CXXRecordDecl *RD) const {
     // Structures with either a non-trivial destructor or a non-trivial
     // copy constructor are always indirect.
