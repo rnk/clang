@@ -38,6 +38,18 @@ public:
     return CC_C;
   }
 
+  bool isCallingConvAllowed(bool isVariadic, bool isInstanceMethod,
+                            CallingConv CC) const {
+    // Variadic functions can only have __cdecl which is the default CC.
+    if (isVariadic && CC != CC_C && CC != CC_Default)
+      return false;
+    // Free functions and static methods can not have __thiscall.
+    if (!isInstanceMethod && CC == CC_X86ThisCall)
+      return false;
+
+    return true;
+  }
+
   bool isNearlyEmpty(const CXXRecordDecl *RD) const {
     // FIXME: Audit the corners
     if (!RD->isDynamicClass())

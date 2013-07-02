@@ -34,6 +34,11 @@ public:
   /// Returns the default calling convention for C++ methods.
   virtual CallingConv getDefaultMethodCallConv(bool isVariadic) const = 0;
 
+  /// Returns \c true if the calling convention is allowed for the specified
+  /// combination of function properties.
+  virtual bool isCallingConvAllowed(bool isVariadic, bool isInstanceMethod,
+                                    CallingConv CC) const;
+
   // Returns whether the given class is nearly empty, with just virtual pointers
   // and no data except possibly virtual bases.
   virtual bool isNearlyEmpty(const CXXRecordDecl *RD) const = 0;

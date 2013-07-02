@@ -7953,6 +7953,14 @@ CallingConv ASTContext::getCanonicalCallConv(CallingConv CC) const {
   return CC;
 }
 
+bool ASTContext::isCallConvAllowed(bool isVariadic, bool isInstanceMethod,
+                                   CallingConv CC) const {
+  // Pass through to the C++ ABI object.
+  if (!ABI)
+    return true;
+  return ABI->isCallingConvAllowed(isVariadic, isInstanceMethod, CC);
+}
+
 bool ASTContext::isNearlyEmpty(const CXXRecordDecl *RD) const {
   // Pass through to the C++ ABI object
   return ABI->isNearlyEmpty(RD);
@@ -7972,6 +7980,13 @@ MangleContext *ASTContext::createMangleContext() {
 }
 
 CXXABI::~CXXABI() {}
+
+bool CXXABI::isCallingConvAllowed(bool isVariadic, bool isInstanceMethod,
+                                  CallingConv CC) const {
+  // Assume any calling convention is allowed if the specific ABI doesn't
+  // override it.
+  return true;
+}
 
 size_t ASTContext::getSideTableAllocatedMemory() const {
   return ASTRecordLayouts.getMemorySize()

@@ -2045,6 +2045,9 @@ def err_cconv_knr : Error<
   "function with no prototype cannot use %0 calling convention">;
 def err_cconv_varargs : Error<
   "variadic function cannot use %0 calling convention">;
+def err_illegal_cconv : Error<
+  "%select{|variadic }0%select{|static }1%select{non-member|member}2 function "
+  "cannot use %3 calling convention">;
 def err_regparm_mismatch : Error<"function declared with regparm(%0) "
   "attribute was previously declared "
   "%plural{0:without the regparm|:with the regparm(%1)}1 attribute">;

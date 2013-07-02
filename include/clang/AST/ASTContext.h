@@ -1758,6 +1758,11 @@ public:
     return (getCanonicalCallConv(lcc) == getCanonicalCallConv(rcc));
   }
 
+  /// \brief Checks if the specified calling convention is allowed in the ABI
+  /// for functions with the given combination of properties.
+  bool isCallConvAllowed(bool isVariadic, bool isInstanceMethod,
+                         CallingConv CC) const;
+
   /// \brief Retrieves the "canonical" template name that refers to a
   /// given template.
   ///

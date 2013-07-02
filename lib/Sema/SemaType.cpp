@@ -4302,6 +4302,71 @@ static bool handleMSPointerTypeQualifierAttr(TypeProcessingState &State,
   return false;
 }
 
+/// Check if the function calling convention attribute is allowed for this
+/// function type by the ABI.  Emit a diagnostic if not.  Return true if
+/// calling convention attribute is not allowed.
+static bool CheckFunctionCCAttr(TypeProcessingState &state,
+                                const FunctionType *FTy,
+                                SourceLocation Loc,
+                                CallingConv CC) {
+  if (!FTy)
+    return false;
+
+  Sema &S = state.getSema();
+  const Declarator &D = state.getDeclarator();
+
+  // Out-of-line redeclaration with wrong CCs won't be accepted due to
+  // CC mismatch with the primary declaration so don't act on it.
+  if (D.getCXXScopeSpec().isNotEmpty())
+    return false;
+
+  // Ignore parens.
+  int ChunkIndex = state.getCurrentChunkIndex();
+  while (ChunkIndex != 0 &&
+         D.getTypeObject(ChunkIndex).Kind == DeclaratorChunk::Paren)
+    ChunkIndex--;
+
+  bool IsCXXMethod;
+  bool IsStatic = false;
+
+  switch(D.getTypeObject(ChunkIndex).Kind) {
+  case DeclaratorChunk::Paren:
+    // The farthest chunk is still paren, so we have a sugared function.
+  case DeclaratorChunk::Function:
+    IsCXXMethod = (D.getContext() == Declarator::MemberContext &&
+                   !D.getDeclSpec().isFriendSpecified());
+    // This can only be a primary declaration, so immediate specifiers matter.
+    IsStatic = (D.getDeclSpec().getStorageClassSpec() == DeclSpec::SCS_static);
+    break;
+
+  case DeclaratorChunk::MemberPointer:
+    // Member pointer context.  Member pointer is only possible for instance
+    // methods, therefore static is always false in this case.
+    IsCXXMethod = true;
+    break;
+
+  case DeclaratorChunk::Pointer:
+  case DeclaratorChunk::Reference:
+    // Function pointer or reference context.
+    IsCXXMethod = false;
+    break;
+
+  default:
+    llvm_unreachable("must be called only for declarator with function types");
+    break;
+  }
+
+  const FunctionProtoType *ProtoType = FTy->getAs<FunctionProtoType>();
+  bool IsVariadic = ProtoType && ProtoType->isVariadic();
+  if (!S.Context.isCallConvAllowed(IsVariadic, IsCXXMethod && !IsStatic, CC)) {
+    S.Diag(Loc, diag::err_illegal_cconv)
+      << IsVariadic << IsStatic << IsCXXMethod
+      << FunctionType::getNameForCallConv(CC) << Loc;
+    return true;
+  }
+  return false;
+}
+
 /// Process an individual function attribute.  Returns true to
 /// indicate that the attribute was handled, false if it wasn't.
 static bool handleFunctionTypeAttr(TypeProcessingState &state,
@@ -4419,6 +4484,11 @@ static bool handleFunctionTypeAttr(TypeProcessingState &state,
       attr.setInvalid();
       return true;
     }
+  }
+
+  if (CheckFunctionCCAttr(state, unwrapped.get(), attr.getLoc(), CC)) {
+    attr.setInvalid();
+    return true;
   }
 
   FunctionType::ExtInfo EI = unwrapped.get()->getExtInfo().withCallingConv(CC);
