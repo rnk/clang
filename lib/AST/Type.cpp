@@ -515,6 +515,21 @@ const ObjCObjectPointerType *Type::getAsObjCInterfacePointerType() const {
   return 0;
 }
 
+const AttributedType *Type::getAsAttributedType() const {
+  // AttributedTypes are non-canonical, so we can't use getAs<AttributedType>().
+  // Instead we have to unwrap each level of sugar iteratively until we get back
+  // the same type or find an AttributedType.
+  QualType Prev;
+  QualType T = QualType(this, 0);
+  while (T != Prev) {
+    if (const AttributedType *AT = dyn_cast<AttributedType>(T))
+      return AT;
+    Prev = T;
+    T = T->getLocallyUnqualifiedSingleStepDesugaredType();
+  }
+  return 0;
+}
+
 const CXXRecordDecl *Type::getPointeeCXXRecordDecl() const {
   QualType PointeeType;
   if (const PointerType *PT = getAs<PointerType>())
@@ -1558,9 +1573,6 @@ QualType QualType::getNonLValueExprType(ASTContext &Context) const {
 
 StringRef FunctionType::getNameForCallConv(CallingConv CC) {
   switch (CC) {
-  case CC_Default: 
-    llvm_unreachable("no name for default cc");
-
   case CC_C: return "cdecl";
   case CC_X86StdCall: return "stdcall";
   case CC_X86FastCall: return "fastcall";

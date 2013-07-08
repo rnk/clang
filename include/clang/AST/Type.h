@@ -1678,6 +1678,7 @@ public:
   const ObjCObjectPointerType *getAsObjCQualifiedIdType() const;
   const ObjCObjectPointerType *getAsObjCQualifiedClassType() const;
   const ObjCObjectType *getAsObjCQualifiedInterfaceType() const;
+  const AttributedType *getAsAttributedType() const;
 
   /// \brief Retrieves the CXXRecordDecl that this type refers to, either
   /// because the type is a RecordType or because it is the injected-class-name

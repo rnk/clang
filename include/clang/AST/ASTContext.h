@@ -1745,18 +1745,13 @@ public:
   NestedNameSpecifier *
   getCanonicalNestedNameSpecifier(NestedNameSpecifier *NNS) const;
 
-  /// \brief Retrieves the default calling convention to use for
-  /// C++ instance methods.
-  CallingConv getDefaultCXXMethodCallConv(bool isVariadic);
-
-  /// \brief Retrieves the canonical representation of the given
-  /// calling convention.
-  CallingConv getCanonicalCallConv(CallingConv CC) const;
+  /// \brief Retrieves the default calling convention for the current target.
+  CallingConv getDefaultCallingConvention(bool isVariadic, bool IsCXXMethod);
 
   /// \brief Determines whether two calling conventions name the same
   /// calling convention.
   bool isSameCallConv(CallingConv lcc, CallingConv rcc) {
-    return (getCanonicalCallConv(lcc) == getCanonicalCallConv(rcc));
+    return lcc == rcc;
   }
 
   /// \brief Retrieves the "canonical" template name that refers to a
