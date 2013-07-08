@@ -150,6 +150,22 @@ public:
   }
 };
 
+class CallingConvAttr : public InheritableAttr {
+  virtual void anchor();
+protected:
+  CallingConvAttr(attr::Kind AK, SourceRange R, unsigned SpellingListIndex = 0)
+    : InheritableAttr(AK, R, SpellingListIndex) {}
+
+public:
+  // Implement isa/cast/dyncast/etc.
+  static bool classof(const Attr *A) {
+    // Relies on relative order of enum emission with respect to MS inheritance
+    // attrs.
+    return (A->getKind() <= attr::LAST_CALLING_CONV &&
+            A->getKind() > attr::LAST_MS_INHERITANCE);
+  }
+};
+
 #include "clang/AST/Attrs.inc"
 
 }  // end namespace clang

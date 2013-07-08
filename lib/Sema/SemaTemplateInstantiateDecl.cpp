@@ -1142,8 +1142,51 @@ static QualType adjustFunctionTypeForInstantiation(ASTContext &Context,
 
   FunctionProtoType::ExtProtoInfo NewEPI = NewFunc->getExtProtoInfo();
   NewEPI.ExtInfo = OrigFunc->getExtInfo();
+
+#if 0
+  // If there's no explicit attribute, use the 
+  const AttributedType *AT = D->getType()->getAsAttributedType();
+  while (AT && !AT->isCallingConv())
+    AT = AT->getEquivalentType()->getAsAttributedType();
+  if (!AT) {
+    CallingConv CC = Context.getDefaultCallingConvention(
+        NewEPI.Variadic, D->isCXXInstanceMember());
+    NewEPI.ExtInfo = NewEPI.ExtInfo.withCallingConv(CC);
+  }
+#endif
+
   return Context.getFunctionType(NewFunc->getResultType(),
                                  NewFunc->getArgTypes(), NewEPI);
+}
+
+static void
+attachFunctionInstantiationParameters(Sema &S, FunctionDecl *FD,
+                                      TypeSourceInfo *TSI,
+                                      SmallVector<ParmVarDecl *, 4> &Params) {
+  TypeLoc OldTL = TSI->getTypeLoc().IgnoreParens();
+  if (!OldTL.getAs<FunctionProtoTypeLoc>()) {
+    // Since we were instantiated via a typedef of a function type, create
+    // new parameters.
+    // FIXME: This should really be an else clause in SubstFunctionType, but we
+    // don't have the location of the new FD.
+    assert(Params.empty());
+    const FunctionProtoType *Proto
+      = FD->getType()->getAs<FunctionProtoType>();
+    assert(Proto && "No function prototype in template instantiation?");
+    for (FunctionProtoType::arg_type_iterator AI = Proto->arg_type_begin(),
+         AE = Proto->arg_type_end(); AI != AE; ++AI) {
+      ParmVarDecl *Param =
+          S.BuildParmVarDeclForTypedef(FD, FD->getLocation(), *AI);
+      Param->setScopeInfo(0, Params.size());
+      Params.push_back(Param);
+    }
+  } else {
+    // Adopt the already-instantiated parameters into our own context.
+    for (unsigned P = 0; P < Params.size(); ++P)
+      if (Params[P])
+        Params[P]->setOwningFunction(FD);
+  }
+  FD->setParams(Params);
 }
 
 /// Normal class members are of more specific types and therefore
@@ -1232,27 +1275,7 @@ Decl *TemplateDeclInstantiator::VisitFunctionDecl(FunctionDecl *D,
   Function->setLexicalDeclContext(LexicalDC);
 
   // Attach the parameters
-  if (isa<FunctionProtoType>(Function->getType().IgnoreParens())) {
-    // Adopt the already-instantiated parameters into our own context.
-    for (unsigned P = 0; P < Params.size(); ++P)
-      if (Params[P])
-        Params[P]->setOwningFunction(Function);
-  } else {
-    // Since we were instantiated via a typedef of a function type, create
-    // new parameters.
-    const FunctionProtoType *Proto
-      = Function->getType()->getAs<FunctionProtoType>();
-    assert(Proto && "No function prototype in template instantiation?");
-    for (FunctionProtoType::arg_type_iterator AI = Proto->arg_type_begin(),
-         AE = Proto->arg_type_end(); AI != AE; ++AI) {
-      ParmVarDecl *Param
-        = SemaRef.BuildParmVarDeclForTypedef(Function, Function->getLocation(),
-                                             *AI);
-      Param->setScopeInfo(0, Params.size());
-      Params.push_back(Param);
-    }
-  }
-  Function->setParams(Params);
+  attachFunctionInstantiationParameters(SemaRef, Function, TInfo, Params);
 
   SourceLocation InstantiateAtPOI;
   if (TemplateParams) {
@@ -1665,9 +1688,7 @@ TemplateDeclInstantiator::VisitCXXMethodDecl(CXXMethodDecl *D,
     Method->setLexicalDeclContext(D->getLexicalDeclContext());
 
   // Attach the parameters
-  for (unsigned P = 0; P < Params.size(); ++P)
-    Params[P]->setOwningFunction(Method);
-  Method->setParams(Params);
+  attachFunctionInstantiationParameters(SemaRef, Method, TInfo, Params);
 
   if (InitMethodInstantiation(Method, D))
     Method->setInvalidDecl();
@@ -2495,8 +2516,10 @@ TemplateDeclInstantiator::SubstFunctionType(FunctionDecl *D,
                                     D->getTypeSpecStartLoc(),
                                     D->getDeclName(),
                                     ThisContext, ThisTypeQuals);
-  if (!NewTInfo)
+  if (!NewTInfo) {
+    llvm::errs() << "!NewTInfo\n";
     return 0;
+  }
 
   if (NewTInfo != OldTInfo) {
     // Get parameters from the new type info.
@@ -2538,13 +2561,21 @@ TemplateDeclInstantiator::SubstFunctionType(FunctionDecl *D,
     // substitution occurred. However, we still need to instantiate
     // the function parameters themselves.
     TypeLoc OldTL = OldTInfo->getTypeLoc().IgnoreParens();
+    //llvm::errs() << "Is it a FPT?\n";
+    //llvm::errs() << OldTL.getTypeLocClass() << '\n';
+    //llvm::errs() << TypeLoc::FunctionProto << '\n';
+    //llvm::errs() << TypeLoc::Typedef << '\n';
+    // FIXME: Unwrap typedefs to instantiate?
     if (FunctionProtoTypeLoc OldProtoLoc =
             OldTL.getAs<FunctionProtoTypeLoc>()) {
+      llvm::errs() << "OldTL.getAs<FunctionProtoTypeLoc>()\n";
       for (unsigned i = 0, i_end = OldProtoLoc.getNumArgs(); i != i_end; ++i) {
         ParmVarDecl *Parm =
             cast_or_null<ParmVarDecl>(VisitParmVarDecl(OldProtoLoc.getArg(i)));
-        if (!Parm)
+        if (!Parm) {
+          llvm::errs() << "!Parm\n";
           return 0;
+        }
         Params.push_back(Parm);
       }
     }

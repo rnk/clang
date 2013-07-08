@@ -1094,6 +1094,15 @@ void EmitClangAttrList(RecordKeeper &Records, raw_ostream &OS) {
         " INHERITABLE_PARAM_ATTR(NAME)\n";
   OS << "#endif\n\n";
 
+  OS << "#ifndef CALLING_CONV_ATTR\n";
+  OS << "#define CALLING_CONV_ATTR(NAME) INHERITABLE_ATTR(NAME)\n";
+  OS << "#endif\n\n";
+
+  OS << "#ifndef LAST_CALLING_CONV_ATTR\n";
+  OS << "#define LAST_CALLING_CONV_ATTR(NAME)"
+        " CALLING_CONV_ATTR(NAME)\n";
+  OS << "#endif\n\n";
+
   OS << "#ifndef MS_INHERITANCE_ATTR\n";
   OS << "#define MS_INHERITANCE_ATTR(NAME) INHERITABLE_ATTR(NAME)\n";
   OS << "#endif\n\n";
@@ -1106,8 +1115,9 @@ void EmitClangAttrList(RecordKeeper &Records, raw_ostream &OS) {
   Record *InhClass = Records.getClass("InheritableAttr");
   Record *InhParamClass = Records.getClass("InheritableParamAttr");
   Record *MSInheritanceClass = Records.getClass("MSInheritanceAttr");
+  Record *CallingConvClass = Records.getClass("CallingConvAttr");
   std::vector<Record*> Attrs = Records.getAllDerivedDefinitions("Attr"),
-                       NonInhAttrs, InhAttrs, InhParamAttrs, MSInhAttrs;
+                       NonInhAttrs, InhAttrs, InhParamAttrs, MSInhAttrs, CCAttrs;
   for (std::vector<Record*>::iterator i = Attrs.begin(), e = Attrs.end();
        i != e; ++i) {
     if (!(*i)->getValueAsBit("ASTNode"))
@@ -1117,22 +1127,28 @@ void EmitClangAttrList(RecordKeeper &Records, raw_ostream &OS) {
       InhParamAttrs.push_back(*i);
     else if ((*i)->isSubClassOf(MSInheritanceClass))
       MSInhAttrs.push_back(*i);
+    else if ((*i)->isSubClassOf(CallingConvClass))
+      CCAttrs.push_back(*i);
     else if ((*i)->isSubClassOf(InhClass))
       InhAttrs.push_back(*i);
     else
       NonInhAttrs.push_back(*i);
   }
 
+  // Implementations of classof in Attr.h rely on this ordering.
   EmitAttrList(OS, "INHERITABLE_PARAM_ATTR", InhParamAttrs);
   EmitAttrList(OS, "MS_INHERITANCE_ATTR", MSInhAttrs);
+  EmitAttrList(OS, "CALLING_CONV_ATTR", CCAttrs);
   EmitAttrList(OS, "INHERITABLE_ATTR", InhAttrs);
   EmitAttrList(OS, "ATTR", NonInhAttrs);
 
   OS << "#undef LAST_ATTR\n";
   OS << "#undef INHERITABLE_ATTR\n";
   OS << "#undef MS_INHERITANCE_ATTR\n";
+  OS << "#undef CALLING_CONV_ATTR\n";
   OS << "#undef LAST_INHERITABLE_ATTR\n";
   OS << "#undef LAST_INHERITABLE_PARAM_ATTR\n";
+  OS << "#undef LAST_CALLING_CONV_ATTR\n";
   OS << "#undef LAST_MS_INHERITANCE_ATTR\n";
   OS << "#undef ATTR\n";
 }

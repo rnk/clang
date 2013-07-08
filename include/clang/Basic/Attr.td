@@ -133,6 +133,9 @@ class InheritableAttr : Attr;
 /// redeclarations, even when it's written on a parameter.
 class InheritableParamAttr : InheritableAttr;
 
+/// A calling convention attribute can be attached to function types.
+class CallingConvAttr : InheritableAttr;
+
 /// An ignored attribute, which we parse but discard with no checking.
 class IgnoredAttr : Attr {
   let Ignored = 1;
@@ -231,7 +234,7 @@ def CarriesDependency : InheritableParamAttr {
   let Subjects = [ParmVar, Function];
 }
 
-def CDecl : InheritableAttr {
+def CDecl : CallingConvAttr {
   let Spellings = [GNU<"cdecl">, CXX11<"gnu", "cdecl">, Keyword<"__cdecl">,
                    Keyword<"_cdecl">];
 }
@@ -356,7 +359,7 @@ def FallThrough : Attr {
   let Subjects = [NullStmt];
 }
 
-def FastCall : InheritableAttr {
+def FastCall : CallingConvAttr {
   let Spellings = [GNU<"fastcall">, CXX11<"gnu", "fastcall">,
                    Keyword<"__fastcall">, Keyword<"_fastcall">];
 }
@@ -600,15 +603,15 @@ def Packed : InheritableAttr {
   let Spellings = [GNU<"packed">, CXX11<"gnu", "packed">];
 }
 
-def PnaclCall : InheritableAttr {
+def PnaclCall : CallingConvAttr {
   let Spellings = [GNU<"pnaclcall">];
 }
 
-def IntelOclBicc : InheritableAttr {
+def IntelOclBicc : CallingConvAttr {
   let Spellings = [GNU<"intel_ocl_bicc">];
 }
 
-def Pcs : InheritableAttr {
+def Pcs : CallingConvAttr {
   let Spellings = [GNU<"pcs">, CXX11<"gnu", "pcs">];
   let Args = [EnumArgument<"PCS", "PCSType",
                            ["aapcs", "aapcs-vfp"],
@@ -658,17 +661,17 @@ def Sentinel : InheritableAttr {
               DefaultIntArgument<"NullPos", 0>];
 }
 
-def StdCall : InheritableAttr {
+def StdCall : CallingConvAttr {
   let Spellings = [GNU<"stdcall">, CXX11<"gnu", "stdcall">,
                    Keyword<"__stdcall">, Keyword<"_stdcall">];
 }
 
-def ThisCall : InheritableAttr {
+def ThisCall : CallingConvAttr {
   let Spellings = [GNU<"thiscall">, CXX11<"gnu", "thiscall">,
                    Keyword<"__thiscall">, Keyword<"_thiscall">];
 }
 
-def Pascal : InheritableAttr {
+def Pascal : CallingConvAttr {
   let Spellings = [GNU<"pascal">, Keyword<"__pascal">, Keyword<"_pascal">];
 }
 

@@ -25,4 +25,6 @@ void InheritableParamAttr::anchor() { }
 
 void MSInheritanceAttr::anchor() { }
 
+void CallingConvAttr::anchor() { }
+
 #include "clang/AST/AttrImpl.inc"

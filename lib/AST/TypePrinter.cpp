@@ -634,9 +634,14 @@ void TypePrinter::printFunctionProtoAfter(const FunctionProtoType *T,
 
   if (!InsideCCAttribute) {
     switch (Info.getCC()) {
-    case CC_Default: break;
     case CC_C:
-      OS << " __attribute__((cdecl))";
+      // The C calling convention is the default on the vast majority of platforms
+      // we support.  If the user wrote it explicitly, it will usually be printed
+      // while traversing the AttributedType.  If the type has been desugared, let
+      // the canonical spelling be the implicit calling convention.
+      // FIXME: It would be better to be explicit in certain contexts, such as a
+      // cdecl function typedef used to declare a member function with the
+      // Microsoft C++ ABI.
       break;
     case CC_X86StdCall:
       OS << " __attribute__((stdcall))";
@@ -1150,6 +1155,8 @@ void TypePrinter::printAttributedAfter(const AttributedType *T,
   }
 
   case AttributedType::attr_regparm: {
+    // FIXME: When Sema learns to form this AttributedType, avoid printing the
+    // attribute again in printFunctionProtoAfter.
     OS << "regparm(";
     QualType t = T->getEquivalentType();
     while (!t->isFunctionType())
@@ -1189,7 +1196,10 @@ void TypePrinter::printAttributedAfter(const AttributedType *T,
     OS << ')';
     break;
 
+  // FIXME: When Sema learns to form this AttributedType, avoid printing the
+  // attribute again in printFunctionProtoAfter.
   case AttributedType::attr_noreturn: OS << "noreturn"; break;
+
   case AttributedType::attr_cdecl: OS << "cdecl"; break;
   case AttributedType::attr_fastcall: OS << "fastcall"; break;
   case AttributedType::attr_stdcall: OS << "stdcall"; break;
