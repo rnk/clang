@@ -297,3 +297,36 @@ void call_member_inheritance() {
   cb_memb_c_cdecl(&A::member_cdecl); // expected-error {{no matching function for call to 'cb_memb_c_cdecl'}}
 }
 } // end namespace Variadic
+
+namespace MultiChunkDecls {
+
+// Try to test declarators that have multiple DeclaratorChunks.
+struct A {
+  void __thiscall member_thiscall(int);
+};
+
+void (A::*return_mptr(short))(int) {
+  return &A::member_thiscall;
+}
+
+void (A::*(*return_fptr_mptr(char))(short))(int) {
+  return return_mptr;
+}
+
+typedef void (A::*mptr_t)(int);
+mptr_t __stdcall return_mptr_std(short) {
+  return &A::member_thiscall;
+}
+
+void (A::*(*return_fptr_std_mptr(char))(short))(int) {
+  return return_mptr_std; // expected-error {{cannot initialize return object of type 'void (MultiChunkDecls::A::*(*)(short))(int) __attribute__((thiscall))' with an lvalue of type 'mptr_t (short) __attribute__((stdcall))'}}
+}
+
+void call_return() {
+  A o;
+  void (A::*(*fptr)(short))(int) = return_fptr_mptr('a');
+  void (A::*mptr)(int) = fptr(1);
+  (o.*mptr)(2);
+}
+
+} // end namespace MultiChunkDecls

@@ -2460,51 +2460,49 @@ TemplateDeclInstantiator::SubstFunctionType(FunctionDecl *D,
                                     D->getTypeSpecStartLoc(),
                                     D->getDeclName(),
                                     ThisContext, ThisTypeQuals);
-  if (!NewTInfo)
+  if (!NewTInfo) {
     return 0;
+  }
 
-  if (NewTInfo != OldTInfo) {
-    // Get parameters from the new type info.
-    TypeLoc OldTL = OldTInfo->getTypeLoc().IgnoreParens();
-    if (FunctionProtoTypeLoc OldProtoLoc =
-            OldTL.getAs<FunctionProtoTypeLoc>()) {
-      TypeLoc NewTL = NewTInfo->getTypeLoc().IgnoreParens();
-      FunctionProtoTypeLoc NewProtoLoc = NewTL.castAs<FunctionProtoTypeLoc>();
-      unsigned NewIdx = 0;
-      for (unsigned OldIdx = 0, NumOldParams = OldProtoLoc.getNumArgs();
-           OldIdx != NumOldParams; ++OldIdx) {
-        ParmVarDecl *OldParam = OldProtoLoc.getArg(OldIdx);
-        LocalInstantiationScope *Scope = SemaRef.CurrentInstantiationScope;
+  TypeLoc OldTL = OldTInfo->getTypeLoc().IgnoreParens();
+  if (FunctionProtoTypeLoc OldProtoLoc =
+          OldTL.getAs<FunctionProtoTypeLoc>()) {
+    if (NewTInfo != OldTInfo) {
+      // Get parameters from the new type info.
+        TypeLoc NewTL = NewTInfo->getTypeLoc().IgnoreParens();
+        FunctionProtoTypeLoc NewProtoLoc = NewTL.castAs<FunctionProtoTypeLoc>();
+        unsigned NewIdx = 0;
+        for (unsigned OldIdx = 0, NumOldParams = OldProtoLoc.getNumArgs();
+             OldIdx != NumOldParams; ++OldIdx) {
+          ParmVarDecl *OldParam = OldProtoLoc.getArg(OldIdx);
+          LocalInstantiationScope *Scope = SemaRef.CurrentInstantiationScope;
 
-        Optional<unsigned> NumArgumentsInExpansion;
-        if (OldParam->isParameterPack())
-          NumArgumentsInExpansion =
-              SemaRef.getNumArgumentsInExpansion(OldParam->getType(),
-                                                 TemplateArgs);
-        if (!NumArgumentsInExpansion) {
-          // Simple case: normal parameter, or a parameter pack that's
-          // instantiated to a (still-dependent) parameter pack.
-          ParmVarDecl *NewParam = NewProtoLoc.getArg(NewIdx++);
-          Params.push_back(NewParam);
-          Scope->InstantiatedLocal(OldParam, NewParam);
-        } else {
-          // Parameter pack expansion: make the instantiation an argument pack.
-          Scope->MakeInstantiatedLocalArgPack(OldParam);
-          for (unsigned I = 0; I != *NumArgumentsInExpansion; ++I) {
+          Optional<unsigned> NumArgumentsInExpansion;
+          if (OldParam->isParameterPack())
+            NumArgumentsInExpansion =
+                SemaRef.getNumArgumentsInExpansion(OldParam->getType(),
+                                                   TemplateArgs);
+          if (!NumArgumentsInExpansion) {
+            // Simple case: normal parameter, or a parameter pack that's
+            // instantiated to a (still-dependent) parameter pack.
             ParmVarDecl *NewParam = NewProtoLoc.getArg(NewIdx++);
             Params.push_back(NewParam);
-            Scope->InstantiatedLocalPackArg(OldParam, NewParam);
+            Scope->InstantiatedLocal(OldParam, NewParam);
+          } else {
+            // Parameter pack expansion: make the instantiation an argument
+            // pack.
+            Scope->MakeInstantiatedLocalArgPack(OldParam);
+            for (unsigned I = 0; I != *NumArgumentsInExpansion; ++I) {
+              ParmVarDecl *NewParam = NewProtoLoc.getArg(NewIdx++);
+              Params.push_back(NewParam);
+              Scope->InstantiatedLocalPackArg(OldParam, NewParam);
+            }
           }
         }
-      }
-    }
-  } else {
-    // The function type itself was not dependent and therefore no
-    // substitution occurred. However, we still need to instantiate
-    // the function parameters themselves.
-    TypeLoc OldTL = OldTInfo->getTypeLoc().IgnoreParens();
-    if (FunctionProtoTypeLoc OldProtoLoc =
-            OldTL.getAs<FunctionProtoTypeLoc>()) {
+    } else {
+      // The function type itself was not dependent and therefore no
+      // substitution occurred. However, we still need to instantiate
+      // the function parameters themselves.
       for (unsigned i = 0, i_end = OldProtoLoc.getNumArgs(); i != i_end; ++i) {
         ParmVarDecl *Parm =
             cast_or_null<ParmVarDecl>(VisitParmVarDecl(OldProtoLoc.getArg(i)));
@@ -2512,23 +2510,25 @@ TemplateDeclInstantiator::SubstFunctionType(FunctionDecl *D,
           return 0;
         Params.push_back(Parm);
       }
-    } else {
-      // If the type of this function, after ignoring parentheses, is not
-      // *directly* a function type, then we're instantiating a function that
-      // was declared via a typedef, e.g.,
-      //
-      //   typedef int functype(int, int);
-      //   functype func;
-      //
-      // In this case, we'll just go instantiate the ParmVarDecls that we
-      // synthesized in the method declaration.
-      SmallVector<QualType, 4> ParamTypes;
-      if (SemaRef.SubstParmTypes(D->getLocation(), D->param_begin(),
-                                 D->getNumParams(), TemplateArgs, ParamTypes,
-                                 &Params))
-        return 0;
     }
+  } else {
+    // If the type of this function, after ignoring parentheses, is not
+    // *directly* a function type, then we're instantiating a function that
+    // was declared via a typedef or with attributes, e.g.,
+    //
+    //   typedef int functype(int, int);
+    //   functype func;
+    //   int __cdecl meth(int, int);
+    //
+    // In this case, we'll just go instantiate the ParmVarDecls that we
+    // synthesized in the method declaration.
+    SmallVector<QualType, 4> ParamTypes;
+    if (SemaRef.SubstParmTypes(D->getLocation(), D->param_begin(),
+                               D->getNumParams(), TemplateArgs, ParamTypes,
+                               &Params))
+      return 0;
   }
+
   return NewTInfo;
 }
 

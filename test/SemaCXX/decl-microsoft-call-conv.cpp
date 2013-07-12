@@ -96,3 +96,17 @@ void            S::static_member_variadic_cdecl(int x, ...) {
   (void)x;
 }
 
+// Declare a template using a calling convention.
+template <class CharT> inline int __cdecl mystrlen(const CharT *str) {
+  int i;
+  for (i = 0; str[i]; i++) { }
+  return i;
+}
+extern int sse_strlen(const char *str);
+template <> inline int __cdecl mystrlen(const char *str) {
+  return sse_strlen(str);
+}
+void use_tmpl(const char *str, const int *ints) {
+  mystrlen(str);
+  mystrlen(ints);
+}

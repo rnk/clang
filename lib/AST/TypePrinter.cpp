@@ -1205,7 +1205,8 @@ void TypePrinter::printAttributedAfter(const AttributedType *T,
   case AttributedType::attr_stdcall: OS << "stdcall"; break;
   case AttributedType::attr_thiscall: OS << "thiscall"; break;
   case AttributedType::attr_pascal: OS << "pascal"; break;
-  case AttributedType::attr_pcs: {
+  case AttributedType::attr_pcs:
+  case AttributedType::attr_pcs_vfp: {
     OS << "pcs(";
    QualType t = T->getEquivalentType();
    while (!t->isFunctionType())

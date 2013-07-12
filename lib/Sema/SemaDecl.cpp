@@ -6075,10 +6075,10 @@ void Sema::checkVoidParamDecl(ParmVarDecl *Param) {
   }
 }
 
-static QualType inferFunctionDeclaratorCC(Sema &S, Declarator &D, QualType R) {
-  const FunctionType *FT = R->getAs<FunctionType>();
-
+static QualType inferFunctionDeclaratorCC(Sema &S, DeclContext *DC,
+                                          Declarator &D, QualType R) {
   // Ignore dependent types.
+  const FunctionType *FT = R->getAs<FunctionType>();
   if (!FT) return R;
 
   // If there's an explicit attribute, leave the type alone.
@@ -6090,12 +6090,18 @@ static QualType inferFunctionDeclaratorCC(Sema &S, Declarator &D, QualType R) {
   // Otherwise, use the default CC based on context.
   FunctionType::ExtInfo EI = FT->getExtInfo();
   bool IsCXXInstanceMethod =
-      (D.getContext() == Declarator::MemberContext &&
-       D.getDeclSpec().getStorageClassSpec() != DeclSpec::SCS_static);
-  bool IsVariadic = (isa<FunctionNoProtoType>(FT) ||
+      (DC->isRecord() &&
+       D.getDeclSpec().getStorageClassSpec() != DeclSpec::SCS_static &&
+       !D.getDeclSpec().isFriendSpecified());
+
+  // Don't treat functions without a prototype as variadic.
+  bool IsVariadic = (isa<FunctionProtoType>(FT) &&
                      cast<FunctionProtoType>(FT)->isVariadic());
+
   CallingConv CC =
       S.Context.getDefaultCallingConvention(IsVariadic, IsCXXInstanceMethod);
+  if (CC == FT->getCallConv())
+    return R;
   FT = S.Context.adjustFunctionType(FT, EI.withCallingConv(CC));
   return S.Context.getQualifiedType(FT, R.getQualifiers());
 }
@@ -6119,7 +6125,7 @@ Sema::ActOnFunctionDeclarator(Scope *S, Declarator &D, DeclContext *DC,
          diag::err_invalid_thread)
       << DeclSpec::getSpecifierName(TSCS);
 
-  R = inferFunctionDeclaratorCC(*this, D, R);
+  R = inferFunctionDeclaratorCC(*this, DC, D, R);
 
   bool isFriend = false;
   FunctionTemplateDecl *FunctionTemplate = 0;
