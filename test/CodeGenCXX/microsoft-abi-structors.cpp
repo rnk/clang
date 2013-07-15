@@ -1,4 +1,8 @@
-// RUN: %clang_cc1 -emit-llvm %s -o - -cxx-abi microsoft -triple=i386-pc-win32 -fno-rtti | FileCheck %s
+// RUN: %clang_cc1 -emit-llvm %s -o - -cxx-abi microsoft -triple=i386-pc-win32 -fno-rtti > %t
+// RUN: FileCheck %s < %t
+// vftables are emitted very late, so do another pass to try to keep the checks
+// in source order.
+// RUN: FileCheck --check-prefix DTORS %s < %t
 
 namespace basic {
 
@@ -38,8 +42,21 @@ B::B() {
 
 struct C {
   virtual ~C() {
-    // The deleting dtor is installed in the vtable and deferred to the end of
-    // the TU.
+// DTORS:      define linkonce_odr x86_thiscallcc void @"\01??_GC@basic@@UAEPAXI@Z"(%"struct.basic::C"* %this, i1 zeroext %should_call_delete)
+// DTORS:        %[[FROMBOOL:[0-9a-z]+]] = zext i1 %should_call_delete to i8
+// DTORS-NEXT:   store i8 %[[FROMBOOL]], i8* %[[SHOULD_DELETE_VAR:[0-9a-z._]+]], align 1
+// DTORS:        %[[SHOULD_DELETE_VALUE:[0-9a-z._]+]] = load i8* %[[SHOULD_DELETE_VAR]]
+// DTORS:        call x86_thiscallcc void @"\01??1C@basic@@UAE@XZ"(%"struct.basic::C"* %[[THIS:[0-9a-z]+]])
+// DTORS-NEXT:   %[[CONDITION:[0-9]+]] = icmp eq i8 %[[SHOULD_DELETE_VALUE]], 0
+// DTORS-NEXT:   br i1 %[[CONDITION]], label %[[CONTINUE_LABEL:[0-9a-z._]+]], label %[[CALL_DELETE_LABEL:[0-9a-z._]+]]
+//
+// DTORS:      [[CALL_DELETE_LABEL]]
+// DTORS-NEXT:   %[[THIS_AS_VOID:[0-9a-z]+]] = bitcast %"struct.basic::C"* %[[THIS]] to i8*
+// DTORS-NEXT:   call void @"\01??3@YAXPAX@Z"(i8* %[[THIS_AS_VOID]])
+// DTORS-NEXT:   br label %[[CONTINUE_LABEL]]
+//
+// DTORS:      [[CONTINUE_LABEL]]
+// DTORS-NEXT:   ret void
   }
   virtual void foo();
 };
@@ -80,7 +97,6 @@ void call_deleting_dtor(C *obj_ptr) {
 // CHECK-NEXT:   call x86_thiscallcc void %[[VDTOR]](%"struct.basic::C"* %[[OBJ_PTR_VALUE]], i1 zeroext true)
 // CHECK:      ret void
 }
-
 
 struct D {
   static int foo();
@@ -231,7 +247,7 @@ struct D : B, C { ~D(); };
 void call_vbase_complete(D *d) {
   d->~D();
 // CHECK: define void @"\01?call_vbase_complete@dtors@@YAXPAUD@1@@Z"
-// CHECK: call x86_thiscallcc void @"\01??_DD@dtors@@QAE@XZ"
+// CHECK: call x86_thiscallcc void @"\01??_DD@dtors@@QAE@XZ"(%"struct.dtors::D"* %{{[^,]+}})
 // CHECK: ret
 }
 
@@ -244,71 +260,22 @@ void call_vbase_complete(D *d) {
 // CHECK-NOT: call
 // CHECK: ret
 
-} // end namespace dtors
-
-namespace dtors2 {
-
-// Test virtual base destruction again, this time from the stack.
-
-struct A { ~A(); };
-struct B : virtual A { ~B(); };
-struct C : virtual A { ~C(); };
-struct D : B, C { ~D(); };
-
-void destroy_d_complete() { D d; }
-// CHECK: define void @"\01?destroy_d_complete@dtors2@@YAXXZ"
-// CHECK: call x86_thiscallcc void @"\01??_DD@dtors2@@QAE@XZ"
-// CHECK: ret
-
-// The complete dtor should call the base dtors for D and the vbase A (once).
-// CHECK: define linkonce_odr x86_thiscallcc void @"\01??_DD@dtors2@@QAE@XZ"
-// CHECK-NOT: call
-// CHECK: call x86_thiscallcc void @"\01??1D@dtors2@@QAE@XZ"
-// CHECK-NOT: call
-// CHECK: call x86_thiscallcc void @"\01??1A@dtors2@@QAE@XZ"
-// CHECK-NOT: call
-// CHECK: ret
-
-}
-
-namespace del_vbase {
-
-// Test that the scalar deleting dtor delegates to the complete dtor.
-// FIXME: We could call the scalar deleting dtor here instead of manually
-// inlining the deletion.
-
-struct A { ~A(); };
-struct B : virtual A { ~B(); };
-
-void call_deleting_dtor(B *b) {
-  delete b;
-// CHECK: define void @"\01?call_deleting_dtor@del_vbase@@YAXPAUB@1@@Z"
-// CHECK: call x86_thiscallcc void @"\01??_DB@del_vbase@@QAE@XZ"
+void destroy_d_complete() {
+  D d;
+// CHECK: define void @"\01?destroy_d_complete@dtors@@YAXXZ"
+// CHECK: call x86_thiscallcc void @"\01??_DD@dtors@@QAE@XZ"(%"struct.dtors::D"* %{{[^,]+}})
 // CHECK: ret
 }
 
-// Defers the complete dtor.
-
-// CHECK: define linkonce_odr x86_thiscallcc void @"\01??_DB@del_vbase@@QAE@XZ"
-// CHECK: call x86_thiscallcc void @"\01??1B@del_vbase@@QAE@XZ"
+// FIXME: Clang manually inlines the deletion, so we don't get a call to the
+// complete dtor (_G).  The only way to call deleting dtors currently is through
+// a vftable.
+void call_nv_deleting_dtor(D *d) {
+  delete d;
+// CHECK: define void @"\01?call_nv_deleting_dtor@dtors@@YAXPAUD@1@@Z"
+// CHECK: call x86_thiscallcc void @"\01??_DD@dtors@@QAE@XZ"(%"struct.dtors::D"* %{{[^,]+}})
+// CHECK: call void @"\01??3@YAXPAX@Z"
 // CHECK: ret
-
 }
 
-// Deferred data used by vtables:
-
-// CHECK:      define linkonce_odr x86_thiscallcc void @"\01??_GC@basic@@UAEPAXI@Z"(%"struct.basic::C"* %this, i1 zeroext %should_call_delete)
-// CHECK:        %[[FROMBOOL:[0-9a-z]+]] = zext i1 %should_call_delete to i8
-// CHECK-NEXT:   store i8 %[[FROMBOOL]], i8* %[[SHOULD_DELETE_VAR:[0-9a-z._]+]], align 1
-// CHECK:        %[[SHOULD_DELETE_VALUE:[0-9a-z._]+]] = load i8* %[[SHOULD_DELETE_VAR]]
-// CHECK:        call x86_thiscallcc void @"\01??1C@basic@@UAE@XZ"(%"struct.basic::C"* %[[THIS:[0-9a-z]+]])
-// CHECK-NEXT:   %[[CONDITION:[0-9]+]] = icmp eq i8 %[[SHOULD_DELETE_VALUE]], 0
-// CHECK-NEXT:   br i1 %[[CONDITION]], label %[[CONTINUE_LABEL:[0-9a-z._]+]], label %[[CALL_DELETE_LABEL:[0-9a-z._]+]]
-//
-// CHECK:      [[CALL_DELETE_LABEL]]
-// CHECK-NEXT:   %[[THIS_AS_VOID:[0-9a-z]+]] = bitcast %"struct.basic::C"* %[[THIS]] to i8*
-// CHECK-NEXT:   call void @"\01??3@YAXPAX@Z"(i8* %[[THIS_AS_VOID]])
-// CHECK-NEXT:   br label %[[CONTINUE_LABEL]]
-//
-// CHECK:      [[CONTINUE_LABEL]]
-// CHECK-NEXT:   ret void
+}

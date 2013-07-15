@@ -1358,10 +1358,9 @@ CodeGenModule::GetOrCreateLLVMFunction(StringRef MangledName,
   // All MSVC dtors other than the base dtor are linkonce_odr and delegate to
   // each other bottoming out with the base dtor.  Therefore we emit non-base
   // dtors on usage, even if there is no dtor definition in the TU.
-  if (getLangOpts().CPlusPlus && getTarget().getCXXABI().isMicrosoft() && D &&
-      isa<CXXDestructorDecl>(D) && GD.getDtorType() != Dtor_Base) {
+  if (getLangOpts().CPlusPlus && D && isa<CXXDestructorDecl>(D) &&
+      getCXXABI().useThunkForDtorVariant(GD.getDtorType()))
     DeferredDeclsToEmit.push_back(GD);
-  }
 
   // This function doesn't have a complete type (for example, the return
   // type is an incomplete struct). Use a fake type instead, and make

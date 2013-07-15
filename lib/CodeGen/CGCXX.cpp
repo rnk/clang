@@ -281,10 +281,11 @@ CodeGenModule::GetAddrOfCXXDestructor(const CXXDestructorDecl *dtor,
                                       llvm::FunctionType *fnType) {
   // If the class has no virtual bases, then the complete and base destructors
   // are equivalent, for all C++ ABIs supported by clang.  We can save on code
-  // size by calling the base dtor directly.
-  // XXX: We could do this for Itanium, but we should consult with John first.
-  if (getTarget().getCXXABI().isMicrosoft() && dtorType == Dtor_Complete &&
-      dtor->getParent()->getNumVBases() == 0)
+  // size by calling the base dtor directly, especially if we'd have to emit a
+  // thunk otherwise.
+  // FIXME: We could do this for Itanium, but we should consult with John first.
+  if (getCXXABI().useThunkForDtorVariant(dtorType) &&
+      dtorType == Dtor_Complete && dtor->getParent()->getNumVBases() == 0)
     dtorType = Dtor_Base;
 
   GlobalDecl GD(dtor, dtorType);
