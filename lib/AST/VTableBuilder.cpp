@@ -63,7 +63,7 @@ public:
     /// Method - The method decl of the overrider.
     const CXXMethodDecl *Method;
 
-    /// Offset - the base offset of the overrider in the layout class.
+    /// Offset - the base offset of the overrider's parent in the layout class.
     CharUnits Offset;
     
     OverriderInfo() : Method(0), Offset(CharUnits::Zero()) { }
@@ -768,6 +768,7 @@ VCallAndVBaseOffsetBuilder::AddVBaseOffsets(const CXXRecordDecl *RD,
 }
 
 /// VTableBuilder - Class for building vtable layout information.
+// FIXME: rename to ItaniumVTableBuilder.
 class VTableBuilder {
 public:
   /// PrimaryBasesSetVectorTy - A set vector of direct and indirect 
@@ -1135,7 +1136,7 @@ void VTableBuilder::ComputeThisAdjustments() {
     // Add it.
     VTableThunks[VTableIndex].This = ThisAdjustment;
 
-    if (isa<CXXDestructorDecl>(MD)) {
+    if (isa<CXXDestructorDecl>(MD) && !isMicrosoftABI()) {
       // Add an adjustment for the deleting destructor as well.
       VTableThunks[VTableIndex + 1].This = ThisAdjustment;
     }
@@ -1415,11 +1416,14 @@ VTableBuilder::IsOverriderUsed(const CXXMethodDecl *Overrider,
   return OverridesIndirectMethodInBases(Overrider, PrimaryBases);
 }
 
+typedef llvm::SmallSetVector<const CXXRecordDecl *, 8> BasesSetVectorTy;
+
 /// FindNearestOverriddenMethod - Given a method, returns the overridden method
 /// from the nearest base. Returns null if no method was found.
-static const CXXMethodDecl * 
+/// The Bases are expected to be sorted in a base-to-derived order.
+static const CXXMethodDecl *
 FindNearestOverriddenMethod(const CXXMethodDecl *MD,
-                            VTableBuilder::PrimaryBasesSetVectorTy &Bases) {
+                            BasesSetVectorTy &Bases) {
   OverriddenMethodsSetTy OverriddenMethods;
   ComputeAllOverriddenMethods(MD, OverriddenMethods);
   
@@ -2279,7 +2283,7 @@ uint64_t VTableContext::getMethodVTableIndex(GlobalDecl GD) {
   
   const CXXRecordDecl *RD = cast<CXXMethodDecl>(GD.getDecl())->getParent();
 
-  ComputeVTableRelatedInformation(RD);
+  computeVTableRelatedInformation(RD);
 
   I = MethodVTableIndices.find(GD);
   assert(I != MethodVTableIndices.end() && "Did not find index!");
@@ -2330,7 +2334,7 @@ static VTableLayout *CreateVTableLayout(const VTableBuilder &Builder) {
                           Builder.isMicrosoftABI());
 }
 
-void VTableContext::ComputeVTableRelatedInformation(const CXXRecordDecl *RD) {
+void VTableContext::computeVTableRelatedInformation(const CXXRecordDecl *RD) {
   const VTableLayout *&Entry = VTableLayouts[RD];
 
   // Check if we've computed this information before.
@@ -2377,4 +2381,803 @@ VTableLayout *VTableContext::createConstructionVTableLayout(
   VTableBuilder Builder(*this, MostDerivedClass, MostDerivedClassOffset, 
                         MostDerivedClassIsVirtual, LayoutClass);
   return CreateVTableLayout(Builder);
+}
+
+unsigned clang::GetVBTableIndex(const CXXRecordDecl *Derived,
+                                const CXXRecordDecl *VBase) {
+  unsigned VBTableIndex = 1; // Start with one to skip the self entry.
+  for (CXXRecordDecl::base_class_const_iterator I = Derived->vbases_begin(),
+       E = Derived->vbases_end(); I != E; ++I) {
+    if (I->getType()->getAsCXXRecordDecl() == VBase)
+      return VBTableIndex;
+    ++VBTableIndex;
+  }
+  llvm_unreachable("VBase must be a vbase of Derived");
+  return 0;
+}
+
+namespace {
+
+// Vtables in the Microsoft ABI are different from the Itanium ABI.
+// The main differences are:
+//  1. Separate vftable and vbtable.
+//  2. Each non-primary base class that has new virtual methods gets its
+//     own vfptr and vftable - no address points needed!
+//  3. Rather than using the most derived class as the type of the hidden 'this'
+//     method parameter, it tries to stick with the base type as long as
+//     possible. This eliminates the need of this adjusting thunks as long as
+//     there are no methods overriding multiple methods at the same time.
+//  4. At entry, the 'this' parameter always points to the vfptr used
+//     for the vftable lookup.
+//  5. Instead of VTT and constructor vtables, vtordisps are emitted into the
+//     class layout if a class has
+//      a) any ctor/dtor and
+//     and
+//      b) a method overriding a method in a virtual base.
+
+class VFTableBuilder {
+public:
+  typedef MicrosoftVFTableContext::MethodVFTableLocation MethodVFTableLocation;
+
+  typedef llvm::DenseMap<GlobalDecl, MethodVFTableLocation>
+    MethodVFTableLocationsTy;
+
+private:
+  /// Context - The ASTContext which we will use for layout information.
+  ASTContext &Context;
+
+  /// MostDerivedClass - The most derived class for which we're building this
+  /// vtable.
+  const CXXRecordDecl *MostDerivedClass;
+
+  const ASTRecordLayout &MostDerivedClassLayout;
+
+  VFPtrInfo WhichVFPtr;
+
+  /// FinalOverriders - The final overriders of the most derived class.
+  const FinalOverriders Overriders;
+
+  /// Components - The components of the vftable being built.
+  SmallVector<VTableComponent, 64> Components;
+
+  MethodVFTableLocationsTy MethodVFTableLocations;
+
+  /// MethodInfo - Contains information about a method in a vtable.
+  /// (Used for computing 'this' pointer adjustment thunks.
+  struct MethodInfo {
+    /// VBTableIndex - The nonzero index in the vbtable that
+    /// this method's base has, or zero.
+    const uint64_t VBTableIndex;
+
+    /// VFTableIndex - The index in the vftable that this method has.
+    const uint64_t VFTableIndex;
+
+    /// ReplacedByThunk - Indicates if this method is shadowed by
+    /// a return-adjusting thunk. If so, it shouldn't be printed
+    /// or suggested for vcalls in the most derived class.
+    bool ReplacedByThunk;
+
+    MethodInfo(uint64_t VBTableIndex, uint64_t VFTableIndex)
+        : VBTableIndex(VBTableIndex), VFTableIndex(VFTableIndex),
+          ReplacedByThunk(false) {}
+
+    MethodInfo() : VBTableIndex(0), VFTableIndex(0), ReplacedByThunk(false) {}
+  };
+
+  typedef llvm::DenseMap<const CXXMethodDecl *, MethodInfo> MethodInfoMapTy;
+
+  /// MethodInfoMap - The information for all methods in the vftable we're
+  /// currently building.
+  MethodInfoMapTy MethodInfoMap;
+
+  typedef llvm::DenseMap<uint64_t, ThunkInfo> VTableThunksMapTy;
+
+  /// VTableThunks - The thunks by vftable index in the vftable currently being
+  /// built.
+  VTableThunksMapTy VTableThunks;
+
+  typedef SmallVector<ThunkInfo, 1> ThunkInfoVectorTy;
+  typedef llvm::DenseMap<const CXXMethodDecl *, ThunkInfoVectorTy> ThunksMapTy;
+
+  /// Thunks - A map that contains all the thunks needed for all methods in the
+  /// most derived class for which the vftable is currently being built.
+  ThunksMapTy Thunks;
+
+  /// AddThunk - Add a thunk for the given method.
+  void AddThunk(const CXXMethodDecl *MD, const ThunkInfo &Thunk) {
+    SmallVector<ThunkInfo, 1> &ThunksVector = Thunks[MD];
+
+    // Check if we have this thunk already.
+    if (std::find(ThunksVector.begin(), ThunksVector.end(), Thunk) !=
+        ThunksVector.end())
+      return;
+
+    ThunksVector.push_back(Thunk);
+  }
+
+  /// ComputeThisOffset - Returns the 'this' argument offset for the given
+  /// method in the given subobject, relative to the beginning of the
+  /// MostDerivedClass.
+  CharUnits ComputeThisOffset(const CXXMethodDecl *MD,
+                              BaseSubobject Base,
+                              FinalOverriders::OverriderInfo Overrider);
+
+  /// AddMethod - Add a single virtual member function to the vftable
+  /// components vector.
+  void AddMethod(const CXXMethodDecl *MD, ThisAdjustment ThisAdjustment,
+                 ReturnAdjustment ReturnAdjustment) {
+    if (const CXXDestructorDecl *DD = dyn_cast<CXXDestructorDecl>(MD)) {
+      assert(ReturnAdjustment.isEmpty() &&
+             "Destructor can't have return adjustment!");
+      Components.push_back(VTableComponent::MakeDeletingDtor(DD));
+    } else {
+      // Add the return adjustment if necessary.
+      if (!ReturnAdjustment.isEmpty() || !ThisAdjustment.isEmpty()) {
+        VTableThunks[Components.size()].Return = ReturnAdjustment;
+        VTableThunks[Components.size()].This = ThisAdjustment;
+      }
+      Components.push_back(VTableComponent::MakeFunction(MD));
+    }
+  }
+
+  /// AddMethods - Add the methods of this base subobject and the relevant
+  /// subbases to the vftable we're currently laying out.
+  void AddMethods(BaseSubobject Base, unsigned BaseDepth,
+                  const CXXRecordDecl *LastVBase,
+                  BasesSetVectorTy &VisitedBases);
+
+  void LayoutVFTable() {
+    // FIXME: unclear what to do with RTTI in MS ABI as emitting it anywhere
+    // breaks the vftable layout. Just skip RTTI for now, can't mangle anyway.
+
+    BasesSetVectorTy VisitedBases;
+    AddMethods(BaseSubobject(MostDerivedClass, CharUnits::Zero()), 0, 0,
+               VisitedBases);
+
+    assert(MethodVFTableLocations.empty());
+    for (MethodInfoMapTy::const_iterator I = MethodInfoMap.begin(),
+         E = MethodInfoMap.end(); I != E; ++I) {
+      const CXXMethodDecl *MD = I->first;
+      const MethodInfo &MI = I->second;
+      if (MI.ReplacedByThunk)
+        continue;
+      MethodVFTableLocation Loc(MI.VBTableIndex, WhichVFPtr.VFPtrOffset,
+                                MI.VFTableIndex);
+      if (const CXXDestructorDecl *DD = dyn_cast<CXXDestructorDecl>(MD)) {
+        MethodVFTableLocations[GlobalDecl(DD, Dtor_Deleting)] = Loc;
+      } else {
+        MethodVFTableLocations[MD] = Loc;
+      }
+    }
+  }
+
+  void ErrorUnsupported(StringRef Feature, SourceLocation Location) {
+    clang::DiagnosticsEngine &Diags = Context.getDiagnostics();
+    unsigned DiagID = Diags.getCustomDiagID(
+        DiagnosticsEngine::Error, "v-table layout for %0 is not supported yet");
+    Diags.Report(Context.getFullLoc(Location), DiagID) << Feature;
+  }
+
+public:
+  VFTableBuilder(const CXXRecordDecl *MostDerivedClass, VFPtrInfo Which)
+      : Context(MostDerivedClass->getASTContext()),
+        MostDerivedClass(MostDerivedClass),
+        MostDerivedClassLayout(Context.getASTRecordLayout(MostDerivedClass)),
+        WhichVFPtr(Which),
+        Overriders(MostDerivedClass, CharUnits(), MostDerivedClass) {
+    LayoutVFTable();
+
+    if (Context.getLangOpts().DumpVTableLayouts)
+      dumpLayout(llvm::errs());
+  }
+
+  uint64_t getNumThunks() const { return Thunks.size(); }
+
+  ThunksMapTy::const_iterator thunks_begin() const { return Thunks.begin(); }
+
+  ThunksMapTy::const_iterator thunks_end() const { return Thunks.end(); }
+
+  MethodVFTableLocationsTy::const_iterator vtable_indices_begin() const {
+    return MethodVFTableLocations.begin();
+  }
+
+  MethodVFTableLocationsTy::const_iterator vtable_indices_end() const {
+    return MethodVFTableLocations.end();
+  }
+
+  uint64_t getNumVTableComponents() const { return Components.size(); }
+
+  const VTableComponent *vtable_component_begin() const {
+    return Components.begin();
+  }
+
+  const VTableComponent *vtable_component_end() const {
+    return Components.end();
+  }
+
+  VTableThunksMapTy::const_iterator vtable_thunks_begin() const {
+    return VTableThunks.begin();
+  }
+
+  VTableThunksMapTy::const_iterator vtable_thunks_end() const {
+    return VTableThunks.end();
+  }
+
+  void dumpLayout(raw_ostream &);
+};
+
+static bool BaseInSet(const CXXBaseSpecifier *Specifier,
+                      CXXBasePath &Path, void *BasesSet) {
+  BasesSetVectorTy *Bases = (BasesSetVectorTy *)BasesSet;
+  return Bases->count(Specifier->getType()->getAsCXXRecordDecl());
+}
+
+CharUnits
+VFTableBuilder::ComputeThisOffset(const CXXMethodDecl *MD,
+                                  BaseSubobject Base,
+                                  FinalOverriders::OverriderInfo Overrider) {
+  if (isa<CXXDestructorDecl>(MD))
+    return CharUnits();
+
+  OverriddenMethodsSetTy OverriddenMethods;
+  ComputeAllOverriddenMethods(MD, OverriddenMethods);
+
+  // List all the bases that declare but not override this method.
+  BasesSetVectorTy OverridenBases;
+  for (OverriddenMethodsSetTy::const_iterator I = OverriddenMethods.begin(),
+       E = OverriddenMethods.end(); I != E; ++I) {
+    const CXXMethodDecl *MD = (*I);
+    if (MD->size_overridden_methods() == 0)
+      OverridenBases.insert(MD->getParent());
+  }
+
+  CXXBasePaths Paths;
+  Base.getBase()->lookupInBases(BaseInSet, &OverridenBases, Paths);
+
+  // This will hold the smallest this offset among overridees of MD.
+  // This implies that an offset of a non-virtual base will dominate an offset
+  // of a virtual base.
+  CharUnits Ret;
+  bool First = true;
+
+  for (CXXBasePaths::paths_iterator I = Paths.begin(), E = Paths.end();
+       I != E; ++I) {
+    const CXXBasePath &Path = (*I);
+    CharUnits ThisOffset = Base.getBaseOffset();
+
+    for (int J = 0, F = Path.size(); J != F; ++J) {
+      const CXXBasePathElement &Element = Path[J];
+      const CXXRecordDecl *PrevRD = Element.Class,
+                          *Base = Element.Base->getType()->getAsCXXRecordDecl();
+      const ASTRecordLayout &Layout = Context.getASTRecordLayout(PrevRD);
+
+      if (Element.Base->isVirtual()) {
+        if (Overrider.Method->getParent() == PrevRD) {
+          // This one's interesting. If the final overrider is in a vbase, it
+          // assumes the this pointer's position to be relative to the start of
+          // the vbase as if it was the most derived class, including the order
+          // of vbases.
+          ThisOffset += Layout.getVBaseClassOffset(Base);
+        } else {
+          ThisOffset = MostDerivedClassLayout.getVBaseClassOffset(Base);
+        }
+      } else {
+        ThisOffset += Layout.getBaseClassOffset(Base);
+      }
+    }
+
+    if (Ret > ThisOffset || First) {
+      First = false;
+      Ret = ThisOffset;
+    }
+  }
+
+  assert(!First && "Method not found in the given subobject?");
+  return Ret;
+}
+
+void VFTableBuilder::AddMethods(BaseSubobject Base, unsigned BaseDepth,
+                                const CXXRecordDecl *LastVBase,
+                                BasesSetVectorTy &VisitedBases) {
+  const CXXRecordDecl *RD = Base.getBase();
+  if (!RD->isPolymorphic())
+    return;
+  const ASTRecordLayout &Layout = Context.getASTRecordLayout(RD);
+
+  // See if this class expands a vftable of one of its bases.
+  const CXXRecordDecl *NextBase = 0, *NextLastVBase = LastVBase;
+  CharUnits NextBaseOffset;
+  if (BaseDepth < WhichVFPtr.PathToBaseWithVFPtr.size()) {
+    NextBase = WhichVFPtr.PathToBaseWithVFPtr[BaseDepth];
+    if (Layout.getVBaseOffsetsMap().count(NextBase)) {
+      NextLastVBase = NextBase;
+      NextBaseOffset = MostDerivedClassLayout.getVBaseClassOffset(NextBase);
+    } else {
+      NextBaseOffset =
+          Base.getBaseOffset() + Layout.getBaseClassOffset(NextBase);
+    }
+  } else if (const CXXRecordDecl *PrimaryBase = Layout.getPrimaryBase()) {
+    assert(!Layout.isPrimaryBaseVirtual() &&
+           "No primary virtual bases in this ABI");
+    NextBase = PrimaryBase;
+    NextBaseOffset = Base.getBaseOffset();
+  } else {
+    // This class does not have own vftable, reuses one from the first
+    // suitable base.
+    for (CXXRecordDecl::base_class_const_iterator I = RD->bases_begin(),
+         E = RD->bases_end(); I != E; ++I) {
+      const CXXRecordDecl *B = I->getType()->getAsCXXRecordDecl();
+      if (!B->isPolymorphic())
+        continue;
+      NextBase = B;
+      if (I->isVirtual()) {
+        NextLastVBase = NextBase;
+        NextBaseOffset = MostDerivedClassLayout.getVBaseClassOffset(NextBase);
+      } else {
+        NextBaseOffset =
+            Base.getBaseOffset() + Layout.getBaseClassOffset(NextBase);
+      }
+      break;
+    }
+  }
+
+  if (NextBase) {
+    AddMethods(BaseSubobject(NextBase, NextBaseOffset), BaseDepth + 1,
+               NextLastVBase, VisitedBases);
+    if (!VisitedBases.insert(NextBase))
+      llvm_unreachable("Found a duplicate primary base!");
+  }
+
+  // Now go through all virtual member functions and add them.
+  for (CXXRecordDecl::method_iterator I = RD->method_begin(),
+       E = RD->method_end(); I != E; ++I) {
+    const CXXMethodDecl *MD = *I;
+
+    if (!MD->isVirtual())
+      continue;
+
+    FinalOverriders::OverriderInfo Overrider =
+        Overriders.getOverrider(MD, Base.getBaseOffset());
+
+    ThisAdjustment ThisAdjustmentOffset;
+    // Check if this virtual member function overrides
+    // a method in one of the visited bases.
+    if (const CXXMethodDecl *OverriddenMD =
+            FindNearestOverriddenMethod(MD, VisitedBases)) {
+      // Replace the method info of the overridden method with our own
+      // method - only if it's in the vftable we're laying out.
+      if (!MethodInfoMap.count(OverriddenMD))
+        continue;
+
+      MethodInfo &OverriddenMethodInfo = MethodInfoMap[OverriddenMD];
+      CharUnits TI = ComputeThisOffset(MD, Base, Overrider);
+      if (TI != WhichVFPtr.VFPtrFullOffset) {
+        ThisAdjustmentOffset.NonVirtual =
+            (TI - WhichVFPtr.VFPtrFullOffset).getQuantity();
+        VTableThunks[OverriddenMethodInfo.VFTableIndex].This =
+            ThisAdjustmentOffset;
+        AddThunk(MD, VTableThunks[OverriddenMethodInfo.VFTableIndex]);
+      }
+
+      if (ComputeReturnAdjustmentBaseOffset(Context, MD, OverriddenMD)
+              .isEmpty()) {
+        MethodInfo MI(OverriddenMethodInfo.VBTableIndex,
+                      OverriddenMethodInfo.VFTableIndex);
+        MethodInfoMap.erase(OverriddenMD);
+
+        assert(!MethodInfoMap.count(MD) &&
+               "Should not have method info for this method yet!");
+        MethodInfoMap.insert(std::make_pair(MD, MI));
+        continue;
+      } else {
+        OverriddenMethodInfo.ReplacedByThunk = true;
+        if (TI != WhichVFPtr.VFPtrOffset) {
+          // FIXME: this is O(N^2), can be O(N).
+          const CXXMethodDecl *SubOverride = OverriddenMD;
+          while ((SubOverride =
+                      FindNearestOverriddenMethod(SubOverride, VisitedBases))) {
+            if (!MethodInfoMap.count(SubOverride))
+              break;
+            MethodInfo &SubOverrideMI = MethodInfoMap[SubOverride];
+            assert(SubOverrideMI.ReplacedByThunk);
+            VTableThunks[SubOverrideMI.VFTableIndex].This =
+                ThisAdjustmentOffset;
+            AddThunk(MD, VTableThunks[SubOverrideMI.VFTableIndex]);
+          }
+        }
+      }
+    } else if (MD->size_overridden_methods() ||
+               Base.getBaseOffset() != WhichVFPtr.VFPtrFullOffset) {
+      // Only add the methods that have return adjustment
+      // or are not defined in any subbases.
+      continue;
+    }
+
+    // Insert the method info for this method.
+    unsigned VBIndex =
+        LastVBase ? GetVBTableIndex(MostDerivedClass, LastVBase) : 0;
+    MethodInfo MI(VBIndex, Components.size());
+
+    assert(!MethodInfoMap.count(MD) &&
+           "Should not have method info for this method yet!");
+    MethodInfoMap.insert(std::make_pair(MD, MI));
+
+    const CXXMethodDecl *OverriderMD = Overrider.Method;
+
+    // Check if this overrider needs a return adjustment.
+    // We don't want to do this for pure virtual member functions.
+    BaseOffset ReturnAdjustmentOffset;
+    ReturnAdjustment ReturnAdjustment;
+    if (!OverriderMD->isPure()) {
+      ReturnAdjustmentOffset =
+          ComputeReturnAdjustmentBaseOffset(Context, OverriderMD, MD);
+    }
+    if (!ReturnAdjustmentOffset.isEmpty()) {
+      ReturnAdjustment.NonVirtual =
+          ReturnAdjustmentOffset.NonVirtualOffset.getQuantity();
+      if (ReturnAdjustmentOffset.VirtualBase)
+        ReturnAdjustment.VBaseOffsetOffset =
+            GetVBTableIndex(ReturnAdjustmentOffset.DerivedClass,
+                            ReturnAdjustmentOffset.VirtualBase);
+    }
+
+    AddMethod(Overrider.Method, ThisAdjustmentOffset, ReturnAdjustment);
+  }
+}
+
+void PrintBasePath(const VFPtrInfo::BasePath &Path, raw_ostream &Out) {
+  for (VFPtrInfo::BasePath::const_reverse_iterator I = Path.rbegin(),
+       E = Path.rend(); I != E; ++I) {
+    Out << "'" << (*I)->getQualifiedNameAsString() << "' in ";
+  }
+}
+
+void VFTableBuilder::dumpLayout(raw_ostream &Out) {
+  Out << "VFTable for ";
+  PrintBasePath(WhichVFPtr.PathToBaseWithVFPtr, Out);
+  Out << "'" << MostDerivedClass->getQualifiedNameAsString();
+  Out << "' (" << Components.size() << " entries).\n";
+
+  for (unsigned I = 0, E = Components.size(); I != E; ++I) {
+    Out << llvm::format("%4d | ", I);
+
+    const VTableComponent &Component = Components[I];
+
+    // Dump the component.
+    switch (Component.getKind()) {
+    case VTableComponent::CK_RTTI:
+      Out << Component.getRTTIDecl()->getQualifiedNameAsString() << " RTTI";
+      break;
+
+    case VTableComponent::CK_FunctionPointer: {
+      const CXXMethodDecl *MD = Component.getFunctionDecl();
+
+      std::string Str = PredefinedExpr::ComputeName(
+          PredefinedExpr::PrettyFunctionNoVirtual, MD);
+      Out << Str;
+      if (MD->isPure())
+        Out << " [pure]";
+
+      if (MD->isDeleted()) {
+        ErrorUnsupported("deleted methods", MD->getLocation());
+        Out << " [deleted]";
+      }
+
+      ThunkInfo Thunk = VTableThunks.lookup(I);
+      if (!Thunk.isEmpty()) {
+        // If this function pointer has a return adjustment, dump it.
+        if (!Thunk.Return.isEmpty()) {
+          Out << "\n       [return adjustment: ";
+          if (Thunk.Return.VBaseOffsetOffset)
+            Out << "vbase #" << Thunk.Return.VBaseOffsetOffset << ", ";
+          Out << Thunk.Return.NonVirtual << " non-virtual]";
+        }
+
+        // If this function pointer has a 'this' pointer adjustment, dump it.
+        if (!Thunk.This.isEmpty()) {
+          assert(!Thunk.This.VCallOffsetOffset &&
+                 "No virtual this adjustment in this ABI");
+          Out << "\n       [this adjustment: " << Thunk.This.NonVirtual
+              << " non-virtual]";
+        }
+      }
+
+      break;
+    }
+
+    case VTableComponent::CK_DeletingDtorPointer: {
+      const CXXDestructorDecl *DD = Component.getDestructorDecl();
+
+      Out << DD->getQualifiedNameAsString();
+      Out << "() [scalar deleting]";
+
+      if (DD->isPure())
+        Out << " [pure]";
+
+      ThunkInfo Thunk = VTableThunks.lookup(I);
+      if (!Thunk.isEmpty()) {
+        assert(Thunk.Return.isEmpty() &&
+               "No return adjustment needed for destructors!");
+        // If this destructor has a 'this' pointer adjustment, dump it.
+        if (!Thunk.This.isEmpty()) {
+          assert(!Thunk.This.VCallOffsetOffset &&
+                 "No virtual this adjustment in this ABI");
+          Out << "\n       [this adjustment: " << Thunk.This.NonVirtual
+              << " non-virtual]";
+        }
+      }
+
+      break;
+    }
+
+    default:
+      DiagnosticsEngine &Diags = Context.getDiagnostics();
+      unsigned DiagID = Diags.getCustomDiagID(
+          DiagnosticsEngine::Error,
+          "Unexpected vftable component type %0 for component number %1");
+      Diags.Report(MostDerivedClass->getLocation(), DiagID)
+          << I << Component.getKind();
+    }
+
+    Out << '\n';
+  }
+
+  Out << '\n';
+
+  if (!Thunks.empty()) {
+    // We store the method names in a map to get a stable order.
+    std::map<std::string, const CXXMethodDecl *> MethodNamesAndDecls;
+
+    for (ThunksMapTy::const_iterator I = Thunks.begin(), E = Thunks.end();
+         I != E; ++I) {
+      const CXXMethodDecl *MD = I->first;
+      std::string MethodName = PredefinedExpr::ComputeName(
+          PredefinedExpr::PrettyFunctionNoVirtual, MD);
+
+      MethodNamesAndDecls.insert(std::make_pair(MethodName, MD));
+    }
+
+    for (std::map<std::string, const CXXMethodDecl *>::const_iterator
+             I = MethodNamesAndDecls.begin(),
+             E = MethodNamesAndDecls.end();
+         I != E; ++I) {
+      const std::string &MethodName = I->first;
+      const CXXMethodDecl *MD = I->second;
+
+      ThunkInfoVectorTy ThunksVector = Thunks[MD];
+      std::sort(ThunksVector.begin(), ThunksVector.end());
+
+      Out << "Thunks for '" << MethodName << "' (" << ThunksVector.size();
+      Out << (ThunksVector.size() == 1 ? " entry" : " entries") << ").\n";
+
+      for (unsigned I = 0, E = ThunksVector.size(); I != E; ++I) {
+        const ThunkInfo &Thunk = ThunksVector[I];
+
+        Out << llvm::format("%4d | ", I);
+
+        // If this function pointer has a return pointer adjustment, dump it.
+        if (!Thunk.Return.isEmpty()) {
+          Out << "return adjustment: ";
+          if (Thunk.Return.VBaseOffsetOffset)
+            Out << "vbase #" << Thunk.Return.VBaseOffsetOffset << ", ";
+          Out << Thunk.Return.NonVirtual << " non-virtual";
+
+          if (!Thunk.This.isEmpty())
+            Out << "\n       ";
+        }
+
+        // If this function pointer has a 'this' pointer adjustment, dump it.
+        if (!Thunk.This.isEmpty()) {
+          assert(!Thunk.This.VCallOffsetOffset &&
+                 "No virtual this adjustment in this ABI");
+          Out << "this adjustment: ";
+          Out << Thunk.This.NonVirtual << " non-virtual";
+        }
+
+        Out << '\n';
+      }
+
+      Out << '\n';
+    }
+  }
+}
+}
+
+static void EnumerateVFPtrs(
+    ASTContext &Context, const CXXRecordDecl *MostDerivedClass,
+    const ASTRecordLayout &MostDerivedClassLayout,
+    BaseSubobject Base, const CXXRecordDecl *LastVBase,
+    const VFPtrInfo::BasePath &PathFromCompleteClass,
+    BasesSetVectorTy &VisitedVBases,
+    MicrosoftVFTableContext::VFPtrListTy &Result) {
+  const CXXRecordDecl *CurrentClass = Base.getBase();
+  CharUnits OffsetInCompleteClass = Base.getBaseOffset();
+  const ASTRecordLayout &CurrentClassLayout =
+      Context.getASTRecordLayout(CurrentClass);
+
+  if (CurrentClassLayout.hasOwnVFPtr()) {
+    if (LastVBase) {
+      uint64_t VBIndex = GetVBTableIndex(MostDerivedClass, LastVBase);
+      assert(VBIndex > 0 && "vbases must have vbindex!");
+      CharUnits VFPtrOffset =
+          OffsetInCompleteClass -
+          MostDerivedClassLayout.getVBaseClassOffset(LastVBase);
+      Result.push_back(VFPtrInfo(VBIndex, LastVBase, VFPtrOffset,
+                                 PathFromCompleteClass, OffsetInCompleteClass));
+    } else {
+      Result.push_back(VFPtrInfo(OffsetInCompleteClass, PathFromCompleteClass));
+    }
+  }
+
+  for (CXXRecordDecl::base_class_const_iterator I = CurrentClass->bases_begin(),
+       E = CurrentClass->bases_end(); I != E; ++I) {
+    const CXXRecordDecl *BaseDecl = I->getType()->getAsCXXRecordDecl();
+
+    CharUnits NextBaseOffset;
+    const CXXRecordDecl *NextLastVBase;
+    if (I->isVirtual()) {
+      if (VisitedVBases.count(BaseDecl))
+        continue;
+      VisitedVBases.insert(BaseDecl);
+      NextBaseOffset = MostDerivedClassLayout.getVBaseClassOffset(BaseDecl);
+      NextLastVBase = BaseDecl;
+    } else {
+      NextBaseOffset = OffsetInCompleteClass +
+                       CurrentClassLayout.getBaseClassOffset(BaseDecl);
+      NextLastVBase = LastVBase;
+    }
+
+    VFPtrInfo::BasePath NewPath = PathFromCompleteClass;
+    NewPath.push_back(BaseDecl);
+    BaseSubobject NextBase(BaseDecl, NextBaseOffset);
+
+    EnumerateVFPtrs(Context, MostDerivedClass, MostDerivedClassLayout, NextBase,
+                    NextLastVBase, NewPath, VisitedVBases, Result);
+  }
+}
+
+void EnumerateVFPtrs(ASTContext &Context, const CXXRecordDecl *ForClass,
+                     MicrosoftVFTableContext::VFPtrListTy &Result) {
+  Result.clear();
+  const ASTRecordLayout &ClassLayout = Context.getASTRecordLayout(ForClass);
+  BasesSetVectorTy VisitedVBases;
+  EnumerateVFPtrs(Context, ForClass, ClassLayout,
+                  BaseSubobject(ForClass, CharUnits::Zero()), 0,
+                  VFPtrInfo::BasePath(), VisitedVBases, Result);
+  if (Result.size() == 1)
+    Result.begin()->PathToBaseWithVFPtr.clear();
+}
+
+void MicrosoftVFTableContext::computeVTableRelatedInformation(
+    const CXXRecordDecl *RD) {
+  assert(RD->isDynamicClass());
+
+  // Check if we've computed this information before.
+  if (VFPtrLocations.count(RD))
+    return;
+
+  const VTableLayout::AddressPointsMapTy EmptyAddressPointsMap;
+
+  VFPtrListTy &VFPtrs = VFPtrLocations[RD];
+  EnumerateVFPtrs(Context, RD, VFPtrs);
+
+  MethodVFTableLocationsTy NewMethodLocations;
+  for (VFPtrListTy::iterator I = VFPtrs.begin(), E = VFPtrs.end();
+       I != E; ++I) {
+    VFTableBuilder Builder(RD, *I);
+
+    VFTableIdTy id(RD, I->VFPtrFullOffset);
+    assert(VFTableLayouts.count(id) == 0);
+    SmallVector<VTableLayout::VTableThunkTy, 1> VTableThunks(
+        Builder.vtable_thunks_begin(), Builder.vtable_thunks_end());
+    std::sort(VTableThunks.begin(), VTableThunks.end());
+    VFTableLayouts[id] = new VTableLayout(
+        Builder.getNumVTableComponents(), Builder.vtable_component_begin(),
+        VTableThunks.size(), VTableThunks.data(), EmptyAddressPointsMap, true);
+    NewMethodLocations.insert(Builder.vtable_indices_begin(),
+                              Builder.vtable_indices_end());
+    Thunks.insert(Builder.thunks_begin(), Builder.thunks_end());
+  }
+
+  MethodVFTableLocations.insert(NewMethodLocations.begin(),
+                                NewMethodLocations.end());
+  if (Context.getLangOpts().DumpVTableLayouts)
+    dumpMethodLocations(RD, NewMethodLocations, llvm::errs());
+}
+
+void MicrosoftVFTableContext::dumpMethodLocations(
+    const CXXRecordDecl *RD, const MethodVFTableLocationsTy &NewMethods,
+    raw_ostream &Out) {
+  // Compute the vtable indices for all the member functions.
+  // Store them in a map keyed by the location so we'll get a sorted table.
+  std::map<MethodVFTableLocation, std::string> IndicesMap;
+  bool HasNonzeroOffset = false;
+
+  for (MethodVFTableLocationsTy::const_iterator I = NewMethods.begin(),
+       E = NewMethods.end(); I != E; ++I) {
+    const CXXMethodDecl *MD = cast<const CXXMethodDecl>(I->first.getDecl());
+    assert(MD->isVirtual());
+
+    std::string MethodName = PredefinedExpr::ComputeName(
+        PredefinedExpr::PrettyFunctionNoVirtual, MD);
+
+    if (isa<CXXDestructorDecl>(MD)) {
+      IndicesMap[I->second] = MethodName + " [scalar deleting]";
+    } else {
+      IndicesMap[I->second] = MethodName;
+    }
+
+    if (!I->second.VFTableOffset.isZero() || I->second.VBTableIndex != 0)
+      HasNonzeroOffset = true;
+  }
+
+  // Print the vtable indices for all the member functions.
+  if (!IndicesMap.empty()) {
+    Out << "VFTable indices for ";
+    Out << "'" << RD->getQualifiedNameAsString();
+    Out << "' (" << IndicesMap.size() << " entries).\n";
+
+    CharUnits LastVFPtrOffset = CharUnits::fromQuantity(-1);
+    uint64_t LastVBIndex = 0;
+    for (std::map<MethodVFTableLocation, std::string>::const_iterator
+             I = IndicesMap.begin(),
+             E = IndicesMap.end();
+         I != E; ++I) {
+      CharUnits VFPtrOffset = I->first.VFTableOffset;
+      uint64_t VBIndex = I->first.VBTableIndex;
+      if (HasNonzeroOffset &&
+          (VFPtrOffset != LastVFPtrOffset || VBIndex != LastVBIndex)) {
+        assert(VBIndex > LastVBIndex || VFPtrOffset > LastVFPtrOffset);
+        Out << " -- accessible via ";
+        if (VBIndex)
+          Out << "vbtable index " << VBIndex << ", ";
+        Out << "vfptr at offset " << VFPtrOffset.getQuantity() << " --\n";
+        LastVFPtrOffset = VFPtrOffset;
+        LastVBIndex = VBIndex;
+      }
+
+      uint64_t VTableIndex = I->first.Index;
+      const std::string &MethodName = I->second;
+      Out << llvm::format("%4" PRIu64 " | ", VTableIndex) << MethodName << '\n';
+    }
+    Out << '\n';
+  }
+}
+
+const MicrosoftVFTableContext::VFPtrListTy &
+MicrosoftVFTableContext::getVFPtrOffsets(const CXXRecordDecl *RD) {
+  computeVTableRelatedInformation(RD);
+
+  assert(VFPtrLocations.count(RD) && "Couldn't find vfptr locations");
+  return VFPtrLocations[RD];
+}
+
+const VTableLayout &
+MicrosoftVFTableContext::getVFTableLayout(const CXXRecordDecl *RD,
+                                          CharUnits VFPtrOffset) {
+  computeVTableRelatedInformation(RD);
+
+  VFTableIdTy id(RD, VFPtrOffset);
+  assert(VFTableLayouts.count(id) && "Couldn't find a VFTable at this offset");
+  return *VFTableLayouts[id];
+}
+
+const MicrosoftVFTableContext::MethodVFTableLocation &
+MicrosoftVFTableContext::getMethodVFTableLocation(GlobalDecl GD) {
+  assert(cast<CXXMethodDecl>(GD.getDecl())->isVirtual() &&
+         "Only use this method for virtual methods or dtors");
+  if (isa<CXXDestructorDecl>(GD.getDecl()))
+    assert(GD.getDtorType() == Dtor_Deleting);
+
+  MethodVFTableLocationsTy::iterator I = MethodVFTableLocations.find(GD);
+  if (I != MethodVFTableLocations.end())
+    return I->second;
+
+  const CXXRecordDecl *RD = cast<CXXMethodDecl>(GD.getDecl())->getParent();
+
+  computeVTableRelatedInformation(RD);
+
+  I = MethodVFTableLocations.find(GD);
+  assert(I != MethodVFTableLocations.end() && "Did not find index!");
+  return I->second;
 }
