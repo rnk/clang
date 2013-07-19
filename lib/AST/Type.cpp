@@ -1856,7 +1856,20 @@ bool AttributedType::isMSTypeSpec() const {
 
 bool AttributedType::isCallingConv() const {
   switch (getAttrKind()) {
-  default:  return false;
+  case attr_ptr32:
+  case attr_ptr64:
+  case attr_sptr:
+  case attr_uptr
+  case attr_address_space:
+  case attr_regparm:
+  case attr_vector_size:
+  case attr_neon_vector_type:
+  case attr_neon_polyvector_type:
+  case attr_objc_gc:
+  case attr_objc_ownership:
+      return false;
+  case attr_pcs:
+  case attr_pcs_vfp:
   case attr_cdecl:
   case attr_fastcall:
   case attr_stdcall:
