@@ -210,3 +210,11 @@ long long test_builtin_readcyclecounter() {
   // CHECK: call i64 @llvm.readcyclecounter()
   return __builtin_readcyclecounter();
 }
+
+// CHECK-LABEL: define void @test_alloca
+void test_alloca(int n) {
+  extern void capture(void *);
+  capture(_alloca(n));
+  // CHECK: alloca i8, i64 %
+  // CHECK: call void @capture
+}

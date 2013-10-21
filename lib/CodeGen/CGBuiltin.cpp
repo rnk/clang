@@ -603,6 +603,7 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
   }
 
   case Builtin::BIalloca:
+  case Builtin::BI_alloca:
   case Builtin::BI__builtin_alloca: {
     Value *Size = EmitScalarExpr(E->getArg(0));
     return RValue::get(Builder.CreateAlloca(Builder.getInt8Ty(), Size));
