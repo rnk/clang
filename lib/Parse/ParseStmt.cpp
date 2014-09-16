@@ -466,7 +466,8 @@ StmtResult Parser::ParseSEHExceptBlock(SourceLocation ExceptLoc) {
   if (ExpectAndConsume(tok::l_paren))
     return StmtError();
 
-  ParseScope ExpectScope(this, Scope::DeclScope | Scope::ControlScope);
+  ParseScope ExpectScope(this, Scope::DeclScope | Scope::ControlScope |
+                                   Scope::SEHExceptScope);
 
   if (getLangOpts().Borland) {
     Ident__exception_info->setIsPoisoned(false);

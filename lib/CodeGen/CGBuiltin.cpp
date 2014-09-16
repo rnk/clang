@@ -1639,6 +1639,13 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
         Builder.CreateAlignedLoad(IntToPtr, /*Align=*/4, /*isVolatile=*/true);
     return RValue::get(Load);
   }
+
+  case Builtin::BI__exception_code:
+  case Builtin::BI_exception_code:
+    return RValue::get(EmitSEHExceptionCode());
+  case Builtin::BI__exception_info:
+  case Builtin::BI_exception_info:
+    return RValue::get(EmitSEHExceptionInfo(E));
   }
 
   // If this is an alias for a lib function (e.g. __builtin_sin), emit
