@@ -393,6 +393,36 @@ Sema::CheckBuiltinFunctionCall(FunctionDecl *FDecl, unsigned BuiltinID,
   case Builtin::BI__builtin___vsnprintf_chk:
     SemaBuiltinMemChkCall(*this, FDecl, TheCall, 1, 3);
     break;
+
+  case Builtin::BI__exception_code:
+  case Builtin::BI_exception_code: {
+    Scope *S = getCurScope();
+    while (S && !S->isSEHExceptScope())
+      S = S->getParent();
+    if (!S || !S->isSEHExceptScope()) {
+      auto *DRE = cast<DeclRefExpr>(TheCall->getCallee()->IgnoreParenCasts());
+      Diag(TheCall->getExprLoc(), diag::err_seh___except_block)
+          << DRE->getDecl()->getIdentifier();
+      return ExprError();
+    }
+    break;
+  }
+
+  case Builtin::BI__exception_info:
+  case Builtin::BI_exception_info: {
+    // FIXME: Diagnose if this is used in the __except block.
+    Scope *S = getCurScope();
+    while (S && !S->isSEHExceptScope())
+      S = S->getParent();
+    if (!S || !S->isSEHExceptScope()) {
+      auto *DRE = cast<DeclRefExpr>(TheCall->getCallee()->IgnoreParenCasts());
+      Diag(TheCall->getExprLoc(), diag::err_seh___except_filter)
+          << DRE->getDecl()->getIdentifier();
+      return ExprError();
+    }
+    break;
+  }
+
   }
 
   // Since the target specific builtins for each arch overlap, only check those

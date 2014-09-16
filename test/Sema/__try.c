@@ -1,4 +1,5 @@
-// RUN: %clang_cc1 -fborland-extensions -fsyntax-only -verify %s
+// RUN: %clang_cc1 -fborland-extensions -DBORLAND -fsyntax-only -verify %s
+// RUN: %clang_cc1 -fms-extensions -fsyntax-only -verify %s
 
 #define JOIN2(x,y) x ## y
 #define JOIN(x,y) JOIN2(x,y)
@@ -10,8 +11,10 @@ typedef int DWORD;
 
 struct EXCEPTION_INFO{};
 
-int __exception_code();
+unsigned long __exception_code();
+#ifdef BORLAND
 struct EXCEPTION_INFO* __exception_info();
+#endif
 void __abnormal_termination();
 
 #define GetExceptionCode __exception_code
@@ -143,6 +146,7 @@ void TEST() {
   __except( function_scope ? 1 : -1 ) {}
 }
 
+#ifdef BORLAND
 void TEST() {
   __try {
     (void)AbnormalTermination;  // expected-error{{only allowed in __finally block}}
@@ -162,13 +166,20 @@ void TEST() {
 }
 
 void TEST() {
-  (void)__exception_code;       // expected-error{{only allowed in __except block}}
   (void)__exception_info;       // expected-error{{only allowed in __except filter expression}}
   (void)__abnormal_termination; // expected-error{{only allowed in __finally block}}
 
-  (void)GetExceptionCode();     // expected-error{{only allowed in __except block}}
   (void)GetExceptionInformation(); // expected-error{{only allowed in __except filter expression}}
   (void)AbnormalTermination();  // expected-error{{only allowed in __finally block}}
+}
+#endif
+
+void TEST() {
+#ifndef BORLAND
+  (void)__exception_code;     // expected-error{{builtin functions must be directly called}}
+#endif
+  (void)__exception_code();     // expected-error{{only allowed in __except block or filter expression}}
+  (void)GetExceptionCode();     // expected-error{{only allowed in __except block or filter expression}}
 }
 
 void test_seh_leave_stmt() {
