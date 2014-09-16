@@ -1639,7 +1639,13 @@ llvm::BasicBlock *CodeGenFunction::getEHResumeBlock(bool isCleanup) {
 }
 
 void CodeGenFunction::EmitSEHTryStmt(const SEHTryStmt &S) {
-  CGM.ErrorUnsupported(&S, "SEH __try");
+  SEHFinallyStmt *Finally = S.getFinallyHandler();
+  if (!Finally) {
+    CGM.ErrorUnsupported(&S, "SEH __try");
+    return;
+  }
+
+  // SEH cleanups are simple.
 }
 
 void CodeGenFunction::EmitSEHLeaveStmt(const SEHLeaveStmt &S) {
