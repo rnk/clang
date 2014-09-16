@@ -13,8 +13,10 @@
 
 #include "CodeGenFunction.h"
 #include "CGCleanup.h"
+#include "CGCXXABI.h"
 #include "CGObjCRuntime.h"
 #include "TargetInfo.h"
+#include "clang/AST/Mangle.h"
 #include "clang/AST/StmtCXX.h"
 #include "clang/AST/StmtObjC.h"
 #include "llvm/IR/CallSite.h"
@@ -106,9 +108,10 @@ static llvm::Constant *getTerminateFn(CodeGenModule &CGM) {
   StringRef name;
 
   // In C++, use std::terminate().
-  if (CGM.getLangOpts().CPlusPlus)
-    name = "_ZSt9terminatev"; // FIXME: mangling!
-  else if (CGM.getLangOpts().ObjC1 &&
+  if (CGM.getLangOpts().CPlusPlus &&
+      CGM.getTarget().getCXXABI().isItaniumFamily()) {
+    name = "_ZSt9terminatev";
+  } else if (CGM.getLangOpts().ObjC1 &&
            CGM.getLangOpts().ObjCRuntime.hasTerminate())
     name = "objc_terminate";
   else
@@ -145,6 +148,8 @@ namespace {
     static const EHPersonality GNU_CPlusPlus;
     static const EHPersonality GNU_CPlusPlus_SJLJ;
     static const EHPersonality GNU_CPlusPlus_SEH;
+    static const EHPersonality MSVC_except_handler;
+    static const EHPersonality MSVC_C_specific_handler;
   };
 }
 
@@ -167,6 +172,10 @@ const EHPersonality
 EHPersonality::GNU_ObjCXX = { "__gnustep_objcxx_personality_v0", nullptr };
 const EHPersonality
 EHPersonality::GNUstep_ObjC = { "__gnustep_objc_personality_v0", nullptr };
+const EHPersonality
+EHPersonality::MSVC_except_handler = { "_except_handler4", nullptr };
+const EHPersonality
+EHPersonality::MSVC_C_specific_handler = { "__C_specific_handler", nullptr };
 
 /// On Win64, use libgcc's SEH personality function. We fall back to dwarf on
 /// other platforms, unless the user asked for SjLj exceptions.
@@ -239,9 +248,37 @@ static const EHPersonality &getObjCXXPersonality(const llvm::Triple &T,
   llvm_unreachable("bad runtime kind");
 }
 
+static const EHPersonality &getCPersonalityMSVC(const llvm::Triple &T,
+                                                const LangOptions &L) {
+  if (L.SjLjExceptions)
+    return EHPersonality::GNU_C_SJLJ;
+
+  if (T.getArch() == llvm::Triple::x86)
+    return EHPersonality::MSVC_except_handler;
+  return EHPersonality::MSVC_C_specific_handler;
+}
+
+static const EHPersonality &getCXXPersonalityMSVC(const llvm::Triple &T,
+                                                  const LangOptions &L) {
+  if (L.SjLjExceptions)
+    return EHPersonality::GNU_CPlusPlus_SJLJ;
+  // FIXME: Implement C++ exceptions.
+  return getCPersonalityMSVC(T, L);
+}
+
 const EHPersonality &EHPersonality::get(CodeGenModule &CGM) {
   const llvm::Triple &T = CGM.getTarget().getTriple();
   const LangOptions &L = CGM.getLangOpts();
+  // Try to pick a personality function that is compatible with MSVC if we're
+  // not compiling Obj-C. Obj-C users better have an Obj-C runtime that supports
+  // the GCC-style personality function.
+  if (T.isWindowsMSVCEnvironment() && !L.ObjC1) {
+    if (L.CPlusPlus)
+      return getCXXPersonalityMSVC(T, L);
+    else
+      return getCPersonalityMSVC(T, L);
+  }
+
   if (L.CPlusPlus && L.ObjC1)
     return getObjCXXPersonality(T, L);
   else if (L.CPlusPlus)
@@ -403,6 +440,13 @@ static void EmitAnyExprToExn(CodeGenFunction &CGF, const Expr *e,
   CGF.DeactivateCleanupBlock(cleanup, cast<llvm::Instruction>(typedAddr));
 }
 
+/// Returns true if this landing pad is using filter functions to select catches
+/// instead of RTTI.
+static bool EHUsesFilterFunctions(CodeGenModule &CGM) {
+  const EHPersonality &P = EHPersonality::get(CGM);
+  return StringRef("__C_specific_handler") == P.PersonalityFn;
+}
+
 llvm::Value *CodeGenFunction::getExceptionSlot() {
   if (!ExceptionSlot)
     ExceptionSlot = CreateTempAlloca(Int8PtrTy, "exn.slot");
@@ -410,8 +454,12 @@ llvm::Value *CodeGenFunction::getExceptionSlot() {
 }
 
 llvm::Value *CodeGenFunction::getEHSelectorSlot() {
-  if (!EHSelectorSlot)
-    EHSelectorSlot = CreateTempAlloca(Int32Ty, "ehselector.slot");
+  if (!EHSelectorSlot) {
+    if (EHUsesFilterFunctions(CGM))
+      EHSelectorSlot = CreateTempAlloca(VoidPtrTy, "ehselector.slot");
+    else
+      EHSelectorSlot = CreateTempAlloca(Int32Ty, "ehselector.slot");
+  }
   return EHSelectorSlot;
 }
 
@@ -725,6 +773,26 @@ llvm::BasicBlock *CodeGenFunction::getInvokeDestImpl() {
   return LP;
 }
 
+/// Return a linkonce_odr __clang_seh_filter_id thread local global. This global
+/// is used to return information from SEH filter functions to landing pads when
+/// using the __C_specific_handler personality function.
+/// FIXME: Communicate through frame_pointer instead.
+static llvm::GlobalValue *getFilterFuncTLS(CodeGenModule &CGM) {
+  llvm::GlobalValue *Entry = CGM.GetGlobalValue("__clang_seh_filter_id");
+  if (Entry) {
+    assert(isa<llvm::GlobalVariable>(Entry));
+    assert(Entry->getType() == CGM.VoidPtrTy->getPointerTo());
+    assert(Entry->isThreadLocal());
+    return Entry;
+  }
+  Entry = new llvm::GlobalVariable(
+      CGM.getModule(), CGM.VoidPtrTy, /*isConstant=*/false,
+      llvm::GlobalValue::LinkOnceODRLinkage,
+      llvm::Constant::getNullValue(CGM.VoidPtrTy), "__clang_seh_filter_id");
+  Entry->setThreadLocalMode(llvm::GlobalValue::LocalDynamicTLSModel);
+  return Entry;
+}
+
 llvm::BasicBlock *CodeGenFunction::EmitLandingPad() {
   assert(EHStack.requiresLandingPad());
 
@@ -758,7 +826,11 @@ llvm::BasicBlock *CodeGenFunction::EmitLandingPad() {
 
   llvm::Value *LPadExn = Builder.CreateExtractValue(LPadInst, 0);
   Builder.CreateStore(LPadExn, getExceptionSlot());
-  llvm::Value *LPadSel = Builder.CreateExtractValue(LPadInst, 1);
+  llvm::Value *LPadSel = nullptr;
+  if (EHUsesFilterFunctions(CGM))
+    LPadSel = Builder.CreateLoad(getFilterFuncTLS(CGM));
+  else
+    LPadSel = Builder.CreateExtractValue(LPadInst, 1);
   Builder.CreateStore(LPadSel, getEHSelectorSlot());
 
   // Save the exception pointer.  It's safe to use a single exception
@@ -1180,13 +1252,17 @@ static void emitCatchDispatchBlock(CodeGenFunction &CGF,
       nextIsEnd = false;
     }
 
-    // Figure out the catch type's index in the LSDA's type table.
-    llvm::CallInst *typeIndex =
-      CGF.Builder.CreateCall(llvm_eh_typeid_for, typeValue);
-    typeIndex->setDoesNotThrow();
+    llvm::Value *IdValue = typeValue;
+    if (!EHUsesFilterFunctions(CGF.CGM)) {
+      // Figure out the catch type's index in the LSDA's type table.
+      llvm::CallInst *typeIndex =
+        CGF.Builder.CreateCall(llvm_eh_typeid_for, typeValue);
+      typeIndex->setDoesNotThrow();
+      IdValue = typeIndex;
+    }
 
     llvm::Value *matchesTypeIndex =
-      CGF.Builder.CreateICmpEQ(selector, typeIndex, "matches");
+      CGF.Builder.CreateICmpEQ(selector, IdValue, "matches");
     CGF.Builder.CreateCondBr(matchesTypeIndex, handler.Block, nextBlock);
 
     // If the next handler is a catch-all, we're completely done.
@@ -1652,7 +1728,216 @@ llvm::BasicBlock *CodeGenFunction::getEHResumeBlock(bool isCleanup) {
 }
 
 void CodeGenFunction::EmitSEHTryStmt(const SEHTryStmt &S) {
-  CGM.ErrorUnsupported(&S, "SEH __try");
+  EnterSEHTryStmt(S);
+  EmitStmt(S.getTryBlock());
+  ExitSEHTryStmt(S);
+}
+
+namespace {
+struct PerformSEHFinally : EHScopeStack::Cleanup  {
+  Stmt *Block;
+  PerformSEHFinally(Stmt *Block) : Block(Block) {}
+  void Emit(CodeGenFunction &CGF, Flags F) override { CGF.EmitStmt(Block); }
+};
+}
+
+llvm::Constant *
+CodeGenFunction::GenerateSEHFilterFunction(CodeGenFunction &ParentCGF, 
+                                           const SEHExceptStmt &Except) {
+  const Decl *ParentCodeDecl = ParentCGF.CurCodeDecl;
+  llvm::Function *ParentFn = ParentCGF.CurFn;
+
+  Expr *FilterExpr = Except.getFilterExpr();
+
+  // Get the mangled function name.
+  SmallString<128> Name;
+  {
+    llvm::raw_svector_ostream OS(Name);
+    const NamedDecl *Parent = dyn_cast_or_null<NamedDecl>(ParentCodeDecl);
+    assert(Parent && "FIXME: handle unnamed decls (lambdas, blocks) with SEH");
+    CGM.getCXXABI().getMangleContext().mangleSEHFilterExpression(Parent, OS);
+  }
+
+  // Arrange a function with the declaration:
+  // int filt(EXCEPTION_POINTERS *exception_pointers, void *frame_pointer)
+  QualType RetTy = getContext().IntTy;
+  FunctionArgList Args;
+  SEHPointersDecl = ImplicitParamDecl::Create(
+      getContext(), nullptr, FilterExpr->getLocStart(),
+      &getContext().Idents.get("exception_pointers"), getContext().VoidPtrTy);
+  Args.push_back(SEHPointersDecl);
+  Args.push_back(ImplicitParamDecl::Create(
+      getContext(), nullptr, FilterExpr->getLocStart(),
+      &getContext().Idents.get("frame_pointer"), getContext().VoidPtrTy));
+  const CGFunctionInfo &FnInfo = CGM.getTypes().arrangeFreeFunctionDeclaration(
+      RetTy, Args, FunctionType::ExtInfo(), /*isVariadic=*/false);
+  llvm::FunctionType *FnTy = CGM.getTypes().GetFunctionType(FnInfo);
+  llvm::Function *Fn = llvm::Function::Create(FnTy, ParentFn->getLinkage(),
+                                              Name.str(), &CGM.getModule());
+
+  // The filter is either in the same comdat as the function, or it's internal.
+  if (llvm::Comdat *C = ParentFn->getComdat()) {
+    Fn->setComdat(C);
+  } else if (ParentFn->hasWeakLinkage() || ParentFn->hasLinkOnceLinkage()) {
+    llvm::Comdat *C = CGM.getModule().getOrInsertComdat(ParentFn->getName());
+    ParentFn->setComdat(C);
+    Fn->setComdat(C);
+  } else {
+    Fn->setLinkage(llvm::GlobalValue::InternalLinkage);
+  }
+
+  StartFunction(GlobalDecl(), RetTy, Fn, FnInfo, Args,
+                FilterExpr->getLocStart(), FilterExpr->getLocStart());
+
+  EmitSEHExceptionCodeSave();
+
+  // Insert dummy allocas for every local variable in scope. We'll initialize
+  // them and prune the unused ones after we find out which ones were
+  // referenced.
+  for (const auto &DeclPtrs : ParentCGF.LocalDeclMap) {
+    const Decl *VD = DeclPtrs.first;
+    llvm::Value *Ptr = DeclPtrs.second;
+    auto *ValTy = cast<llvm::PointerType>(Ptr->getType())->getElementType();
+    LocalDeclMap[VD] = CreateTempAlloca(ValTy, Ptr->getName() + ".filt");
+  }
+
+  // Emit the original filter expression.
+  llvm::Value *R = EmitScalarExpr(FilterExpr);
+  R = Builder.CreateIntCast(R, CGM.IntTy,
+                            FilterExpr->getType()->isSignedIntegerType());
+  Builder.CreateStore(R, ReturnValue);
+
+  // Remember if the filter fired and store it to TLS.
+  // __clang_seh_filter_id = Result ? Fn : nullptr;
+  // FIXME: LLVM should figure out which filter fired even with the SEH
+  // personality functions.
+  llvm::Constant *VoidPtrFn = llvm::ConstantExpr::getBitCast(CurFn, Int8PtrTy);
+  llvm::Value *Cond =
+      Builder.CreateICmpEQ(R, llvm::ConstantInt::get(CGM.IntTy, 1));
+  llvm::Value *Id = Builder.CreateSelect(
+      Cond, VoidPtrFn, llvm::Constant::getNullValue(Int8PtrTy));
+  Builder.CreateStore(Id, getFilterFuncTLS(CGM));
+
+  FinishFunction(FilterExpr->getLocEnd());
+
+  // Prune unused local references to locals from the parent function, and
+  // diagnose the remaining uses until we can rewrite them to point into the
+  // parent frame.
+  // FIXME: We can use the frame_pointer parameter to write to the parent
+  // function's local stack variables instead, but probably need intrinsics to
+  // make that work.
+  for (const auto &DeclPtrs : ParentCGF.LocalDeclMap) {
+    const Decl *VD = DeclPtrs.first;
+    auto *Alloca = cast<llvm::AllocaInst>(LocalDeclMap[VD]);
+    if (Alloca->hasNUses(0)) {
+      Alloca->eraseFromParent();
+    } else {
+      ErrorUnsupported(FilterExpr,
+                       "local variable reference in SEH filter expression");
+      Alloca->replaceAllUsesWith(llvm::UndefValue::get(Alloca->getType()));
+      Alloca->eraseFromParent();
+    }
+  }
+
+  return VoidPtrFn;
+}
+
+void CodeGenFunction::EmitSEHExceptionCodeSave() {
+  // Save the exception code in the exception slot to unify exception access in
+  // the filter function and the landing pad.
+  // struct EXCEPTION_POINTERS {
+  //   EXCEPTION_RECORD *ExceptionRecord;
+  //   CONTEXT *ContextRecord;
+  // };
+  // void *exn.slot =
+  //     (void *)(uintptr_t)exception_pointers->ExceptionRecord->ExceptionCode;
+  llvm::Value *Ptrs = Builder.CreateLoad(GetAddrOfLocalVar(SEHPointersDecl));
+  llvm::Type *RecordTy = CGM.Int32Ty->getPointerTo();
+  llvm::Type *PtrsTy = llvm::StructType::get(RecordTy, CGM.VoidPtrTy, nullptr);
+  Ptrs = Builder.CreateBitCast(Ptrs, PtrsTy->getPointerTo());
+  llvm::Value *Rec = Builder.CreateStructGEP(Ptrs, 0);
+  Rec = Builder.CreateLoad(Rec);
+  llvm::Value *Code = Builder.CreateLoad(Rec);
+  Code = Builder.CreateZExt(Code, CGM.IntPtrTy);
+  Code = Builder.CreateIntToPtr(Code, CGM.VoidPtrTy);
+  Builder.CreateStore(Code, getExceptionSlot());
+}
+
+llvm::Value *CodeGenFunction::EmitSEHExceptionCode() {
+  // If we're in a landing pad or filter function, exn.slot will point to the
+  // EXCEPTION_RECORD. The first field of the EXCEPTION_RECORD is always
+  // "DWORD ExceptionCode", so load an int.
+  assert(ExceptionSlot);
+  llvm::Value *Code =
+      Builder.CreatePtrToInt(getExceptionFromSlot(), CGM.IntPtrTy);
+  return Builder.CreateTrunc(Code, CGM.Int32Ty);
+}
+
+llvm::Value *CodeGenFunction::EmitSEHExceptionInfo(const CallExpr *E) {
+  if (!SEHPointersDecl) {
+    // FIXME: Diagnose earlier.
+    unsigned DiagID = CGM.getDiags().getCustomDiagID(
+        DiagnosticsEngine::Error,
+        "cannot use _exception_info outside of filter expressions");
+    CGM.getDiags().Report(E->getLocStart(), DiagID) << E->getSourceRange();
+    return llvm::Constant::getNullValue(CGM.VoidPtrTy);
+  }
+  return Builder.CreateLoad(GetAddrOfLocalVar(SEHPointersDecl));
+}
+
+void CodeGenFunction::EnterSEHTryStmt(const SEHTryStmt &S) {
+  if (SEHExceptStmt *Except = S.getExceptHandler()) {
+    EHCatchScope *CatchScope = EHStack.pushCatch(1);
+    CodeGenFunction FilterCGF(CGM, /*suppressNewContext=*/true);
+    llvm::Constant *FilterFuncPtr =
+        FilterCGF.GenerateSEHFilterFunction(*this, *Except);
+    llvm::BasicBlock *ExceptBB = createBasicBlock("__except");
+    CatchScope->setHandler(0, FilterFuncPtr, ExceptBB);
+  }
+
+  if (SEHFinallyStmt *Finally = S.getFinallyHandler()) {
+    // SEH cleanups should be simple.
+    EHStack.pushCleanup<PerformSEHFinally>(NormalAndEHCleanup,
+                                           Finally->getBlock());
+  }
+}
+
+void CodeGenFunction::ExitSEHTryStmt(const SEHTryStmt &S) {
+  if (SEHExceptStmt *Except = S.getExceptHandler()) {
+    EHCatchScope &CatchScope = cast<EHCatchScope>(*EHStack.begin());
+
+    // Don't emit the __except block if the __try block lacked invokes.
+    // TODO: Model unwind edges from instructions, either with iload / istore or
+    // a try body function.
+    if (!CatchScope.hasEHBranches()) {
+      CatchScope.clearHandlerBlocks();
+      EHStack.popCatch();
+      return;
+    }
+
+    // The fall-through block.
+    llvm::BasicBlock *ContBB = createBasicBlock("__try.cont");
+
+    // We just emitted the body of the __try; jump to the continue block.
+    if (HaveInsertPoint())
+      Builder.CreateBr(ContBB);
+
+    // Check if our filter function returned true.
+    emitCatchDispatchBlock(*this, CatchScope);
+
+    // Grab the block before we pop the handler.
+    llvm::BasicBlock *ExceptBB = CatchScope.getHandler(0).Block;
+    EHStack.popCatch();
+
+    EmitBlockAfterUses(ExceptBB);
+    EmitStmt(Except->getBlock());
+    Builder.CreateBr(ContBB);
+    EmitBlock(ContBB);
+  }
+
+  if (SEHFinallyStmt *Finally = S.getFinallyHandler()) {
+    PopCleanupBlock();
+  }
 }
 
 void CodeGenFunction::EmitSEHLeaveStmt(const SEHLeaveStmt &S) {
