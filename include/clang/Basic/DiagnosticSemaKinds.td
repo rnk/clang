@@ -5209,6 +5209,11 @@ def err_need_header_before_ms_uuidof : Error<
   "you need to include <guiddef.h> before using the '__uuidof' operator">;
 def err_ms___leave_not_in___try : Error<
   "'__leave' statement not in __try block">;
+def err_cannot_mix_seh : Error<
+  "SEH __try statements cannot appear in the same function as "
+  "%select{C++ try|Obj-C @try}0 statements">;
+def note_try_stmt_here : Note<
+  "conflicting %select{C++ try|Obj-C @try}0 statement here">;
 def err_uuidof_without_guid : Error<
   "cannot call operator __uuidof on a type with no GUID">;
 def err_uuidof_with_multiple_guids : Error<

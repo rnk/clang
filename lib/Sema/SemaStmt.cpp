@@ -3059,6 +3059,25 @@ StmtResult Sema::BuildReturnStmt(SourceLocation ReturnLoc, Expr *RetValExp) {
   return Result;
 }
 
+static void checkEHPersonality(Sema &S) {
+  const FunctionScopeInfo *SI = S.getCurFunction();
+  SEHTryStmt *SEHTry = SI->getFirstSEHTry();
+  Stmt *CXXTry = SI->getFirstCXXTry();
+  Stmt *ObjCTry = SI->getFirstObjCTry();
+
+  // We can't have SEH with any other kind EH, but we apparently support mixing
+  // and matching C++ EH with ObjC EH. MSVC rejects mixing cleanups with SEH,
+  // but we allow them in Clang because there are too many constructs to
+  // diagnose.
+  Stmt *OtherTry = CXXTry ? CXXTry : ObjCTry;
+  if (SEHTry && OtherTry) {
+    S.Diag(SEHTry->getTryLoc(), diag::err_cannot_mix_seh)
+        << int(OtherTry == ObjCTry);
+    S.Diag(OtherTry->getLocStart(), diag::note_try_stmt_here)
+        << int(OtherTry == ObjCTry);
+  }
+}
+
 StmtResult
 Sema::ActOnObjCAtCatchStmt(SourceLocation AtLoc,
                            SourceLocation RParen, Decl *Parm,
@@ -3076,15 +3095,17 @@ Sema::ActOnObjCAtFinallyStmt(SourceLocation AtLoc, Stmt *Body) {
 }
 
 StmtResult
-Sema::ActOnObjCAtTryStmt(SourceLocation AtLoc, Stmt *Try,
+Sema::ActOnObjCAtTryStmt(SourceLocation AtLoc, Stmt *TryBody,
                          MultiStmtArg CatchStmts, Stmt *Finally) {
   if (!getLangOpts().ObjCExceptions)
     Diag(AtLoc, diag::err_objc_exceptions_disabled) << "@try";
 
-  getCurFunction()->setHasBranchProtectedScope();
   unsigned NumCatchStmts = CatchStmts.size();
-  return ObjCAtTryStmt::Create(Context, AtLoc, Try, CatchStmts.data(),
-                               NumCatchStmts, Finally);
+  auto *Try = ObjCAtTryStmt::Create(Context, AtLoc, TryBody, CatchStmts.data(),
+                                    NumCatchStmts, Finally);
+  getCurFunction()->setHasObjCAtTry(Try);
+  checkEHPersonality(*this);
+  return Try;
 }
 
 StmtResult Sema::BuildObjCAtThrowStmt(SourceLocation AtLoc, Expr *Throw) {
@@ -3276,7 +3297,9 @@ StmtResult Sema::ActOnCXXTryBlock(SourceLocation TryLoc, Stmt *TryBlock,
     }
   }
 
-  getCurFunction()->setHasBranchProtectedScope();
+  auto *Try = CXXTryStmt::Create(Context, TryLoc, TryBlock, Handlers);
+  getCurFunction()->setHasCXXTry(Try);
+  checkEHPersonality(*this);
 
   // FIXME: We should detect handlers that cannot catch anything because an
   // earlier handler catches a superclass. Need to find a method that is not
@@ -3284,7 +3307,7 @@ StmtResult Sema::ActOnCXXTryBlock(SourceLocation TryLoc, Stmt *TryBlock,
   // Neither of these are explicitly forbidden, but every compiler detects them
   // and warns.
 
-  return CXXTryStmt::Create(Context, TryLoc, TryBlock, Handlers);
+  return Try;
 }
 
 StmtResult
@@ -3294,9 +3317,10 @@ Sema::ActOnSEHTryBlock(bool IsCXXTry,
                        Stmt *Handler) {
   assert(TryBlock && Handler);
 
-  getCurFunction()->setHasBranchProtectedScope();
-
-  return SEHTryStmt::Create(Context,IsCXXTry,TryLoc,TryBlock,Handler);
+  auto *Try = SEHTryStmt::Create(Context,IsCXXTry,TryLoc,TryBlock,Handler);
+  getCurFunction()->setHasSEHTry(Try);
+  checkEHPersonality(*this);
+  return Try;
 }
 
 StmtResult

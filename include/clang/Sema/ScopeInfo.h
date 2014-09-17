@@ -31,17 +31,20 @@ class Decl;
 class BlockDecl;
 class CapturedDecl;
 class CXXMethodDecl;
+class CXXTryStmt;
 class FieldDecl;
 class ObjCPropertyDecl;
 class IdentifierInfo;
 class ImplicitParamDecl;
 class LabelDecl;
 class ReturnStmt;
+class SEHTryStmt;
 class Scope;
 class SwitchStmt;
 class TemplateTypeParmDecl;
 class TemplateParameterList;
 class VarDecl;
+class ObjCAtTryStmt;
 class ObjCIvarRefExpr;
 class ObjCPropertyRefExpr;
 class ObjCMessageExpr;
@@ -126,6 +129,15 @@ public:
 
   /// \brief Used to determine if errors occurred in this function or block.
   DiagnosticErrorTrap ErrorTrap;
+
+  /// \brief First C++ try statement, if present.
+  CXXTryStmt *FirstCXXTry;
+
+  /// \brief First Obj-C @try statement, if present.
+  ObjCAtTryStmt *FirstObjCTry;
+
+  /// \brief First SEH __try statement, if present.
+  SEHTryStmt *FirstSEHTry;
 
   /// SwitchStack - This is the current set of active switch statements in the
   /// block.
@@ -309,6 +321,28 @@ public:
     HasBranchProtectedScope = true;
   }
 
+  CXXTryStmt *getFirstCXXTry() const { return FirstCXXTry; }
+  ObjCAtTryStmt *getFirstObjCTry() const { return FirstObjCTry; }
+  SEHTryStmt *getFirstSEHTry() const { return FirstSEHTry; }
+
+  void setHasCXXTry(CXXTryStmt *Try) {
+    HasBranchProtectedScope = true;
+    if (!FirstCXXTry)
+      FirstCXXTry = Try;
+  }
+
+  void setHasObjCAtTry(ObjCAtTryStmt *Try) {
+    HasBranchProtectedScope = true;
+    if (!FirstObjCTry)
+      FirstObjCTry = Try;
+  }
+
+  void setHasSEHTry(SEHTryStmt *Try) {
+    HasBranchProtectedScope = true;
+    if (!FirstSEHTry)
+      FirstSEHTry = Try;
+  }
+
   void setHasIndirectGoto() {
     HasIndirectGoto = true;
   }
@@ -334,7 +368,10 @@ public:
       ObjCWarnForNoDesignatedInitChain(false),
       ObjCIsSecondaryInit(false),
       ObjCWarnForNoInitDelegation(false),
-      ErrorTrap(Diag) { }
+      ErrorTrap(Diag),
+      FirstCXXTry(nullptr),
+      FirstObjCTry(nullptr),
+      FirstSEHTry(nullptr) { }
 
   virtual ~FunctionScopeInfo();
 
