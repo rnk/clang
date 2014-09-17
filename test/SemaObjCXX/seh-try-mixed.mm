@@ -1,4 +1,4 @@
-// RUN: clang -cc1 -triple i686-pc-windows-msvc -verify %s -fms-extensions -fexceptions -fcxx-exceptions -fobjc-exceptions
+// RUN: %clang_cc1 -triple i686-pc-windows-msvc -verify %s -fms-extensions -fexceptions -fcxx-exceptions -fobjc-exceptions
 
 void bar();
 
