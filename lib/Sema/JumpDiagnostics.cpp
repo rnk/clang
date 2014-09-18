@@ -338,6 +338,31 @@ void JumpScopeChecker::BuildScopeInformation(Stmt *S, unsigned &origParentScope)
     return;
   }
 
+#if 0
+  case Stmt::SEHTryStmtClass: {
+    SEHTryStmt *TS = cast<SEHTryStmt>(S);
+    unsigned newParentScope;
+    Scopes.push_back(GotoScope(ParentScope,
+                               diag::note_protected_by_cxx_try,
+                               diag::note_exits_cxx_try,
+                               TS->getSourceRange().getBegin()));
+    if (Stmt *TryBlock = TS->getTryBlock())
+      BuildScopeInformation(TryBlock, (newParentScope = Scopes.size()-1));
+
+    // Jump from the catch into the try is not allowed either.
+    for (unsigned I = 0, E = TS->getNumHandlers(); I != E; ++I) {
+      CXXCatchStmt *CS = TS->getHandler(I);
+      Scopes.push_back(GotoScope(ParentScope,
+                                 diag::note_protected_by_cxx_catch,
+                                 diag::note_exits_cxx_catch,
+                                 CS->getSourceRange().getBegin()));
+      BuildScopeInformation(CS->getHandlerBlock(), 
+                            (newParentScope = Scopes.size()-1));
+    }
+    return;
+  }
+#endif
+
   default:
     break;
   }
