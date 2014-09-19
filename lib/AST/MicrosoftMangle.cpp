@@ -90,6 +90,7 @@ class MicrosoftMangleContextImpl : public MicrosoftMangleContext {
   llvm::DenseMap<DiscriminatorKeyTy, unsigned> Discriminator;
   llvm::DenseMap<const NamedDecl *, unsigned> Uniquifier;
   llvm::DenseMap<const CXXRecordDecl *, unsigned> LambdaIds;
+  llvm::DenseMap<const NamedDecl *, unsigned> SEHFilterIds;
 
 public:
   MicrosoftMangleContextImpl(ASTContext &Context, DiagnosticsEngine &Diags)
@@ -135,6 +136,8 @@ public:
   void mangleDynamicInitializer(const VarDecl *D, raw_ostream &Out) override;
   void mangleDynamicAtExitDestructor(const VarDecl *D,
                                      raw_ostream &Out) override;
+  void mangleSEHFilterExpression(const NamedDecl *EnclosingDecl,
+                                 raw_ostream &Out) override;
   void mangleStringLiteral(const StringLiteral *SL, raw_ostream &Out) override;
   bool getNextDiscriminator(const NamedDecl *ND, unsigned &disc) {
     // Lambda closure types are already numbered.
@@ -2323,6 +2326,18 @@ void MicrosoftMangleContextImpl::mangleCXXRTTICompleteObjectLocator(
   for (const CXXRecordDecl *RD : BasePath)
     Mangler.mangleName(RD);
   Mangler.getStream() << '@';
+}
+
+void MicrosoftMangleContextImpl::mangleSEHFilterExpression(
+    const NamedDecl *EnclosingDecl, raw_ostream &Out) {
+  MicrosoftCXXNameMangler Mangler(*this, Out);
+  // The function body is in the same comdat as the function with the handler,
+  // so the numbering here doesn't have to be the same across TUs.
+  //
+  // <mangled-name> ::= ?filt$ <filter-number> @0
+  Mangler.getStream() << "?filt$" << SEHFilterIds[EnclosingDecl]++ << "@0@";
+  // FIXME
+  Mangler.mangleName(EnclosingDecl);
 }
 
 void MicrosoftMangleContextImpl::mangleTypeName(QualType T, raw_ostream &Out) {

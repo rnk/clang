@@ -1918,6 +1918,11 @@ public:
   void EmitCXXTryStmt(const CXXTryStmt &S);
   void EmitSEHTryStmt(const SEHTryStmt &S);
   void EmitSEHLeaveStmt(const SEHLeaveStmt &S);
+  void EnterSEHTryStmt(const SEHTryStmt &S);
+  void ExitSEHTryStmt(const SEHTryStmt &S);
+
+  llvm::Constant *generateSEHFilterFunction(const SEHExceptStmt &S);
+
   void EmitCXXForRangeStmt(const CXXForRangeStmt &S,
                            ArrayRef<const Attr *> Attrs = None);
 

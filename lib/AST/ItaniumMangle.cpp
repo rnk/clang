@@ -156,6 +156,8 @@ public:
   void mangleDynamicInitializer(const VarDecl *D, raw_ostream &Out) override;
   void mangleDynamicAtExitDestructor(const VarDecl *D,
                                      raw_ostream &Out) override;
+  void mangleSEHFilterExpression(const NamedDecl *EnclosingDecl,
+                                 raw_ostream &Out) override;
   void mangleItaniumThreadLocalInit(const VarDecl *D, raw_ostream &) override;
   void mangleItaniumThreadLocalWrapper(const VarDecl *D,
                                        raw_ostream &) override;
@@ -3809,6 +3811,15 @@ void ItaniumMangleContextImpl::mangleDynamicAtExitDestructor(const VarDecl *D,
     Mangler.mangle(D);
   else
     Mangler.getStream() << D->getName();
+}
+
+void ItaniumMangleContextImpl::mangleSEHFilterExpression(
+    const NamedDecl *EnclosingDecl, raw_ostream &Out) {
+  // FIXME: Bad location info.
+  unsigned DiagID = getDiags().getCustomDiagID(
+      DiagnosticsEngine::Error, "cannot SEH filter expressions yet");
+  getDiags().Report(EnclosingDecl->getLocation(), DiagID)
+      << EnclosingDecl->getSourceRange();
 }
 
 void ItaniumMangleContextImpl::mangleItaniumThreadLocalInit(const VarDecl *D,

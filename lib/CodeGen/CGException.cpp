@@ -13,8 +13,10 @@
 
 #include "CodeGenFunction.h"
 #include "CGCleanup.h"
+#include "CGCXXABI.h"
 #include "CGObjCRuntime.h"
 #include "TargetInfo.h"
+#include "clang/AST/Mangle.h"
 #include "clang/AST/StmtCXX.h"
 #include "clang/AST/StmtObjC.h"
 #include "llvm/IR/CallSite.h"
@@ -106,9 +108,10 @@ static llvm::Constant *getTerminateFn(CodeGenModule &CGM) {
   StringRef name;
 
   // In C++, use std::terminate().
-  if (CGM.getLangOpts().CPlusPlus)
-    name = "_ZSt9terminatev"; // FIXME: mangling!
-  else if (CGM.getLangOpts().ObjC1 &&
+  if (CGM.getLangOpts().CPlusPlus &&
+      CGM.getTarget().getCXXABI().isItaniumFamily()) {
+    name = "_ZSt9terminatev";
+  } else if (CGM.getLangOpts().ObjC1 &&
            CGM.getLangOpts().ObjCRuntime.hasTerminate())
     name = "objc_terminate";
   else
@@ -1665,13 +1668,114 @@ llvm::BasicBlock *CodeGenFunction::getEHResumeBlock(bool isCleanup) {
 }
 
 void CodeGenFunction::EmitSEHTryStmt(const SEHTryStmt &S) {
-  SEHFinallyStmt *Finally = S.getFinallyHandler();
-  if (!Finally) {
-    CGM.ErrorUnsupported(&S, "SEH __try");
-    return;
+  EnterSEHTryStmt(S);
+  EmitStmt(S.getTryBlock());
+  ExitSEHTryStmt(S);
+}
+
+namespace {
+struct PerformSEHFinally : EHScopeStack::Cleanup  {
+  Stmt *Block;
+  PerformSEHFinally(Stmt *Block) : Block(Block) {}
+  void Emit(CodeGenFunction &CGF, Flags F) override { CGF.EmitStmt(Block); }
+};
+}
+
+llvm::Constant *
+CodeGenFunction::generateSEHFilterFunction(const SEHExceptStmt &Except) {
+  Expr *FilterExpr = Except.getFilterExpr();
+
+  // Get the mangled function name.
+  SmallString<128> Name;
+  {
+    llvm::raw_svector_ostream OS(Name);
+    const NamedDecl *Parent = dyn_cast_or_null<NamedDecl>(CurCodeDecl);
+    assert(Parent && "FIXME: handle unnamed decls (lambdas, blocks) with SEH");
+    CGM.getCXXABI().getMangleContext().mangleSEHFilterExpression(Parent, OS);
   }
 
-  // SEH cleanups are simple.
+  // Arrange an LLVM function with the prototype 'int filt(void*)'.
+  QualType RetTy = getContext().IntTy;
+  ImplicitParamDecl *FramePointer = ImplicitParamDecl::Create(
+      getContext(), nullptr, FilterExpr->getLocStart(),
+      &getContext().Idents.get("frame_pointer"), getContext().VoidPtrTy);
+  FunctionArgList Args; // No arguments.
+  Args.push_back(FramePointer);
+  const CGFunctionInfo &FnInfo = CGM.getTypes().arrangeFreeFunctionDeclaration(
+      RetTy, Args, FunctionType::ExtInfo(), /*isVariadic=*/false);
+  llvm::FunctionType *FnTy = CGM.getTypes().GetFunctionType(FnInfo);
+  llvm::Function *Fn = llvm::Function::Create(FnTy, CurFn->getLinkage(),
+                                              Name.str(), &CGM.getModule());
+  // TODO: Fn->setComdat();
+
+  CodeGenFunction CGF(CGM, /*suppressNewContext=*/true);
+  CGF.StartFunction(GlobalDecl(), RetTy, Fn, FnInfo, Args,
+                    FilterExpr->getLocStart(), FilterExpr->getLocStart());
+  // FIXME: This is emitting an expr from one function inside another. The
+  // LocalDeclMap will be completely wrong. In order to get this right, we have
+  // to pass information via the frame pointer. Just crash for now.
+  llvm::Value *R = CGF.EmitScalarExpr(FilterExpr);
+  if (FilterExpr->getType()->isUnsignedIntegerType())
+    R = CGF.Builder.CreateZExt(R, CGM.IntTy);
+  else
+    R = CGF.Builder.CreateSExt(R, CGM.IntTy);
+  CGF.Builder.CreateStore(R, CGF.ReturnValue);
+  CGF.FinishFunction(FilterExpr->getLocEnd());
+
+  return llvm::Constant::getNullValue(Int8PtrTy);
+}
+
+void CodeGenFunction::EnterSEHTryStmt(const SEHTryStmt &S) {
+  if (SEHExceptStmt *Except = S.getExceptHandler()) {
+    EHCatchScope *CatchScope = EHStack.pushCatch(1);
+    llvm::Constant *FilterFuncPtr = generateSEHFilterFunction(*Except);
+    llvm::BasicBlock *ExceptBB = createBasicBlock("__except");
+    CatchScope->setHandler(0, FilterFuncPtr, ExceptBB);
+  }
+
+  if (SEHFinallyStmt *Finally = S.getFinallyHandler()) {
+    // SEH cleanups should be simple.
+    EHStack.pushCleanup<PerformSEHFinally>(NormalAndEHCleanup,
+                                           Finally->getBlock());
+  }
+}
+
+void CodeGenFunction::ExitSEHTryStmt(const SEHTryStmt &S) {
+  if (SEHExceptStmt *Except = S.getExceptHandler()) {
+    EHCatchScope &CatchScope = cast<EHCatchScope>(*EHStack.begin());
+
+    // Don't emit the __except block if the __try block lacked invokes.
+    // TODO: Model unwind edges from instructions, either with iload / istore or
+    // a try body function.
+    if (!CatchScope.hasEHBranches()) {
+      CatchScope.clearHandlerBlocks();
+      EHStack.popCatch();
+      return;
+    }
+
+    // The fall-through block.
+    llvm::BasicBlock *ContBB = createBasicBlock("__try.cont");
+
+    // We just emitted the body of the __try; jump to the continue block.
+    if (HaveInsertPoint())
+      Builder.CreateBr(ContBB);
+
+    // Check if our filter function returned true.
+    emitCatchDispatchBlock(*this, CatchScope);
+
+    // Grab the block before we pop the handler.
+    llvm::BasicBlock *ExceptBB = CatchScope.getHandler(0).Block;
+    EHStack.popCatch();
+
+    EmitBlockAfterUses(ExceptBB);
+    EmitStmt(Except->getBlock());
+    Builder.CreateBr(ContBB);
+    EmitBlock(ContBB);
+  }
+
+  if (SEHFinallyStmt *Finally = S.getFinallyHandler()) {
+    PopCleanupBlock();
+  }
 }
 
 void CodeGenFunction::EmitSEHLeaveStmt(const SEHLeaveStmt &S) {
