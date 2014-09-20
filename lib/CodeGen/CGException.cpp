@@ -1694,13 +1694,16 @@ CodeGenFunction::generateSEHFilterFunction(const SEHExceptStmt &Except) {
     CGM.getCXXABI().getMangleContext().mangleSEHFilterExpression(Parent, OS);
   }
 
-  // Arrange an LLVM function with the prototype 'int filt(void*)'.
+  // Arrange a function with the declaration:
+  // int filt(void *frame_pointer, EXCEPTION_POINTERS *exception_pointers)
   QualType RetTy = getContext().IntTy;
-  ImplicitParamDecl *FramePointer = ImplicitParamDecl::Create(
+  FunctionArgList Args;
+  Args.push_back(ImplicitParamDecl::Create(
       getContext(), nullptr, FilterExpr->getLocStart(),
-      &getContext().Idents.get("frame_pointer"), getContext().VoidPtrTy);
-  FunctionArgList Args; // No arguments.
-  Args.push_back(FramePointer);
+      &getContext().Idents.get("frame_pointer"), getContext().VoidPtrTy));
+  Args.push_back(ImplicitParamDecl::Create(
+      getContext(), nullptr, FilterExpr->getLocStart(),
+      &getContext().Idents.get("exception_pointers"), getContext().VoidPtrTy));
   const CGFunctionInfo &FnInfo = CGM.getTypes().arrangeFreeFunctionDeclaration(
       RetTy, Args, FunctionType::ExtInfo(), /*isVariadic=*/false);
   llvm::FunctionType *FnTy = CGM.getTypes().GetFunctionType(FnInfo);

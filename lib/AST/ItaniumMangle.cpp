@@ -3815,11 +3815,12 @@ void ItaniumMangleContextImpl::mangleDynamicAtExitDestructor(const VarDecl *D,
 
 void ItaniumMangleContextImpl::mangleSEHFilterExpression(
     const NamedDecl *EnclosingDecl, raw_ostream &Out) {
-  // FIXME: Bad location info.
-  unsigned DiagID = getDiags().getCustomDiagID(
-      DiagnosticsEngine::Error, "cannot SEH filter expressions yet");
-  getDiags().Report(EnclosingDecl->getLocation(), DiagID)
-      << EnclosingDecl->getSourceRange();
+  CXXNameMangler Mangler(*this, Out);
+  Mangler.getStream() << "__filt_";
+  if (shouldMangleDeclName(EnclosingDecl))
+    Mangler.mangle(EnclosingDecl);
+  else
+    Mangler.getStream() << EnclosingDecl->getName();
 }
 
 void ItaniumMangleContextImpl::mangleItaniumThreadLocalInit(const VarDecl *D,
