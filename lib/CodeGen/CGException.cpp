@@ -1201,6 +1201,7 @@ static void emitCatchDispatchBlock(CodeGenFunction &CGF,
       CGF.Builder.CreateCall(llvm_eh_typeid_for, typeValue);
     typeIndex->setDoesNotThrow();
 
+    CGF.Builder.CreateCall(CGF.CGM.getIntrinsic(llvm::Intrinsic::debugtrap));
     llvm::Value *matchesTypeIndex =
       CGF.Builder.CreateICmpEQ(selector, typeIndex, "matches");
     CGF.Builder.CreateCondBr(matchesTypeIndex, handler.Block, nextBlock);
@@ -1682,66 +1683,120 @@ struct PerformSEHFinally : EHScopeStack::Cleanup  {
 }
 
 llvm::Constant *
-CodeGenFunction::generateSEHFilterFunction(const SEHExceptStmt &Except) {
+CodeGenFunction::generateSEHFilterFunction(const Decl *ParentCodeDecl,
+                                           llvm::Function *ParentFn,
+                                           const SEHExceptStmt &Except) {
   Expr *FilterExpr = Except.getFilterExpr();
 
   // Get the mangled function name.
   SmallString<128> Name;
   {
     llvm::raw_svector_ostream OS(Name);
-    const NamedDecl *Parent = dyn_cast_or_null<NamedDecl>(CurCodeDecl);
+    const NamedDecl *Parent = dyn_cast_or_null<NamedDecl>(ParentCodeDecl);
     assert(Parent && "FIXME: handle unnamed decls (lambdas, blocks) with SEH");
     CGM.getCXXABI().getMangleContext().mangleSEHFilterExpression(Parent, OS);
   }
 
   // Arrange a function with the declaration:
-  // int filt(void *frame_pointer, EXCEPTION_POINTERS *exception_pointers)
+  // int filt(EXCEPTION_POINTERS *exception_pointers, void *frame_pointer)
   QualType RetTy = getContext().IntTy;
   FunctionArgList Args;
   Args.push_back(ImplicitParamDecl::Create(
       getContext(), nullptr, FilterExpr->getLocStart(),
-      &getContext().Idents.get("frame_pointer"), getContext().VoidPtrTy));
+      &getContext().Idents.get("exception_pointers"), getContext().VoidPtrTy));
   Args.push_back(ImplicitParamDecl::Create(
       getContext(), nullptr, FilterExpr->getLocStart(),
-      &getContext().Idents.get("exception_pointers"), getContext().VoidPtrTy));
+      &getContext().Idents.get("frame_pointer"), getContext().VoidPtrTy));
   const CGFunctionInfo &FnInfo = CGM.getTypes().arrangeFreeFunctionDeclaration(
       RetTy, Args, FunctionType::ExtInfo(), /*isVariadic=*/false);
   llvm::FunctionType *FnTy = CGM.getTypes().GetFunctionType(FnInfo);
-  llvm::Function *Fn = llvm::Function::Create(FnTy, CurFn->getLinkage(),
+  llvm::Function *Fn = llvm::Function::Create(FnTy, ParentFn->getLinkage(),
                                               Name.str(), &CGM.getModule());
 
   // The filter is either in the same comdat as the function, or it's internal.
-  if (llvm::Comdat *C = CurFn->getComdat()) {
+  if (llvm::Comdat *C = ParentFn->getComdat()) {
     Fn->setComdat(C);
-  } else if (CurFn->hasWeakLinkage() || CurFn->hasLinkOnceLinkage()) {
-    llvm::Comdat *C = CGM.getModule().getOrInsertComdat(CurFn->getName());
-    CurFn->setComdat(C);
+  } else if (ParentFn->hasWeakLinkage() || ParentFn->hasLinkOnceLinkage()) {
+    llvm::Comdat *C = CGM.getModule().getOrInsertComdat(ParentFn->getName());
+    ParentFn->setComdat(C);
     Fn->setComdat(C);
   } else {
     Fn->setLinkage(llvm::GlobalValue::InternalLinkage);
   }
 
-  CodeGenFunction CGF(CGM, /*suppressNewContext=*/true);
-  CGF.StartFunction(GlobalDecl(), RetTy, Fn, FnInfo, Args,
-                    FilterExpr->getLocStart(), FilterExpr->getLocStart());
+  StartFunction(GlobalDecl(), RetTy, Fn, FnInfo, Args,
+                FilterExpr->getLocStart(), FilterExpr->getLocStart());
   // FIXME: This is emitting an expr from one function inside another. The
   // LocalDeclMap will be completely wrong. In order to get this right, we have
   // to pass information via the frame pointer. Just crash for now.
-  llvm::Value *R = CGF.EmitScalarExpr(FilterExpr);
+  llvm::Value *R = EmitScalarExpr(FilterExpr);
   if (FilterExpr->getType()->isUnsignedIntegerType())
-    R = CGF.Builder.CreateZExt(R, CGM.IntTy);
+    R = Builder.CreateZExt(R, CGM.IntTy);
   else
-    R = CGF.Builder.CreateSExt(R, CGM.IntTy);
-  CGF.Builder.CreateStore(R, CGF.ReturnValue);
-  CGF.FinishFunction(FilterExpr->getLocEnd());
+    R = Builder.CreateSExt(R, CGM.IntTy);
+  Builder.CreateStore(R, ReturnValue);
 
-  return llvm::ConstantExpr::getBitCast(Fn, Int8PtrTy);
+  // The __C_specific_handler personality function doesn't set RAX:RDX to return
+  // the exception pointer and typeid info, so we do it manually in our filter
+  // function if it is returning 1.
+  llvm::BasicBlock *StoreTypeId = createBasicBlock("store_typeid");
+  llvm::BasicBlock *Epilogue = createBasicBlock("epilogue");
+  R = Builder.CreateICmpEQ(R, llvm::ConstantInt::get(CGM.IntTy, 1));
+  Builder.CreateCondBr(R, StoreTypeId, Epilogue);
+
+  // intptr_t *EHReg1 = &exception_pointers->Context->[RE]ax;
+  // intptr_t *EHReg2 = &exception_pointers->Context->[RE]dx;
+  EmitBlock(StoreTypeId);
+  llvm::Type *EHPtrsType = llvm::StructType::get(
+      CGM.VoidPtrTy, CGM.IntPtrTy->getPointerTo(0), nullptr);
+  llvm::Value *EHPtrs = Builder.CreateLoad(GetAddrOfLocalVar(Args[0]));
+  EHPtrs = Builder.CreateBitCast(EHPtrs, EHPtrsType->getPointerTo());
+  llvm::Value *Context =
+      Builder.CreateLoad(Builder.CreateStructGEP(EHPtrs, 1), "context");
+  int RegNo1 = CGM.getTarget().getEHDataOffsetInWindowsContext(0);
+  int RegNo2 = CGM.getTarget().getEHDataOffsetInWindowsContext(1);
+  llvm::Value *EHReg1 = Builder.CreateConstGEP1_32(Context, RegNo1);
+  llvm::Value *EHReg2 = Builder.CreateConstGEP1_32(Context, RegNo2);
+
+  //Builder.CreateMemSet(Builder.CreateBitCast(Context, CGM.VoidPtrTy),
+                       //llvm::ConstantInt::get(CGM.Int8Ty, 0), 1232, 1);
+
+  // Emit an error if we haven't implemented SEH for this target yet.
+  if (RegNo1 < 0 || RegNo2 < 0)
+    ErrorUnsupported(FilterExpr, "SEH filter expression on this platform");
+
+  // FIXME: Store useful information for __except.
+  // *EHReg1 = nullptr;
+  Builder.CreateStore(llvm::Constant::getNullValue(CGM.IntPtrTy), EHReg1);
+
+  // *EHReg2 = llvm.eh.typeid.for(Fn);
+  llvm::Value *llvm_eh_typeid_for =
+      CGM.getIntrinsic(llvm::Intrinsic::eh_typeid_for);
+  llvm::Constant *VoidPtrFn = llvm::ConstantExpr::getBitCast(Fn, Int8PtrTy);
+  llvm::CallInst *TypeId = Builder.CreateCall(llvm_eh_typeid_for, VoidPtrFn);
+  TypeId->setDoesNotThrow();
+  llvm::Value *TypeIdVal = Builder.CreateZExtOrTrunc(TypeId, CGM.IntPtrTy);
+  Builder.CreateStore(TypeIdVal, EHReg2);
+  for (int I = 0; I < 16; ++I) {
+    if (I == 4 || I == 5)
+      continue;
+    Builder.CreateStore(TypeIdVal, Builder.CreateConstGEP1_32(Context, 21 + I));
+  }
+  Builder.CreateCall(CGM.getIntrinsic(llvm::Intrinsic::debugtrap));
+  Builder.CreateBr(Epilogue);
+
+  EmitBlock(Epilogue);
+  FinishFunction(FilterExpr->getLocEnd());
+
+  return VoidPtrFn;
 }
 
 void CodeGenFunction::EnterSEHTryStmt(const SEHTryStmt &S) {
   if (SEHExceptStmt *Except = S.getExceptHandler()) {
     EHCatchScope *CatchScope = EHStack.pushCatch(1);
-    llvm::Constant *FilterFuncPtr = generateSEHFilterFunction(*Except);
+    CodeGenFunction FilterCGF(CGM, /*suppressNewContext=*/true);
+    llvm::Constant *FilterFuncPtr =
+        FilterCGF.generateSEHFilterFunction(CurCodeDecl, CurFn, *Except);
     llvm::BasicBlock *ExceptBB = createBasicBlock("__except");
     CatchScope->setHandler(0, FilterFuncPtr, ExceptBB);
   }

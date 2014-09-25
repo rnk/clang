@@ -3275,6 +3275,13 @@ public:
                         MacroBuilder &Builder) const override {
     WindowsTargetInfo<X86_32TargetInfo>::getTargetDefines(Opts, Builder);
   }
+  int getEHDataOffsetInWindowsContext(unsigned RegNo) const override {
+    switch (RegNo) {
+    case 0: return 22;
+    case 1: return 21;
+    }
+    return -1;
+  }
 };
 
 // x86-32 Windows Visual Studio target
@@ -3526,6 +3533,13 @@ public:
     return (CC == CC_C ||
             CC == CC_IntelOclBicc ||
             CC == CC_X86_64SysV) ? CCCR_OK : CCCR_Warning;
+  }
+  int getEHDataOffsetInWindowsContext(unsigned RegNo) const override {
+    switch (RegNo) {
+    case 0: return 15;
+    case 1: return 17;
+    }
+    return -1;
   }
 };
 } // end anonymous namespace

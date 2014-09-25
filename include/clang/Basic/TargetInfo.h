@@ -770,6 +770,13 @@ public:
     return -1;
   }
 
+  /// \brief Similar to getEHDataRegisterNumber, except this is the offset into
+  /// a Windows CONTEXT struct at which to store EH data. The offset is measured
+  /// in GPR-sized slots, which assumes that the GPR slot will be aligned.
+  virtual int getEHDataOffsetInWindowsContext(unsigned RegNo) const {
+    return -1;
+  }
+
   /// \brief Return the section to use for C++ static initialization functions.
   virtual const char *getStaticInitSectionSpecifier() const {
     return nullptr;
