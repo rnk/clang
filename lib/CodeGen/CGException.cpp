@@ -1709,7 +1709,17 @@ CodeGenFunction::generateSEHFilterFunction(const SEHExceptStmt &Except) {
   llvm::FunctionType *FnTy = CGM.getTypes().GetFunctionType(FnInfo);
   llvm::Function *Fn = llvm::Function::Create(FnTy, CurFn->getLinkage(),
                                               Name.str(), &CGM.getModule());
-  // TODO: Fn->setComdat();
+
+  // The filter is either in the same comdat as the function, or it's internal.
+  if (llvm::Comdat *C = CurFn->getComdat()) {
+    Fn->setComdat(C);
+  } else if (CurFn->hasWeakLinkage() || CurFn->hasLinkOnceLinkage()) {
+    llvm::Comdat *C = CGM.getModule().getOrInsertComdat(CurFn->getName());
+    CurFn->setComdat(C);
+    Fn->setComdat(C);
+  } else {
+    Fn->setLinkage(llvm::GlobalValue::InternalLinkage);
+  }
 
   CodeGenFunction CGF(CGM, /*suppressNewContext=*/true);
   CGF.StartFunction(GlobalDecl(), RetTy, Fn, FnInfo, Args,
@@ -1725,7 +1735,7 @@ CodeGenFunction::generateSEHFilterFunction(const SEHExceptStmt &Except) {
   CGF.Builder.CreateStore(R, CGF.ReturnValue);
   CGF.FinishFunction(FilterExpr->getLocEnd());
 
-  return llvm::Constant::getNullValue(Int8PtrTy);
+  return llvm::ConstantExpr::getBitCast(Fn, Int8PtrTy);
 }
 
 void CodeGenFunction::EnterSEHTryStmt(const SEHTryStmt &S) {
