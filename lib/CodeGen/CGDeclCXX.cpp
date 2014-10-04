@@ -260,18 +260,26 @@ void CodeGenModule::EmitPointerToInitFunc(const VarDecl *D,
       llvm::GlobalValue::PrivateLinkage, InitFunc, "__cxx_init_fn_ptr");
   PtrArray->setSection(ISA->getSection());
   addUsedGlobal(PtrArray);
+  addToComdatGroupIfPresent(GV, PtrArray);
+}
 
-  // If the GV is already in a comdat group, then we have to join it.
-  llvm::Comdat *C = GV->getComdat();
+void CodeGenModule::addToComdatGroupIfPresent(llvm::GlobalObject *GV,
+                                              llvm::GlobalObject *NewGV) {
+  if (!supportsCOMDAT())
+    return;
 
   // LinkOnce and Weak linkage are lowered down to a single-member comdat group.
   // Make an explicit group so we can join it.
+  llvm::Comdat *C = GV->getComdat();
   if (!C && (GV->hasWeakLinkage() || GV->hasLinkOnceLinkage())) {
     C = TheModule.getOrInsertComdat(GV->getName());
     GV->setComdat(C);
   }
+
+  // If the GV is already in a comdat group, then we have to join it. Otherwise,
+  // we leave NewGV with the linkage it already has, which is usually internal.
   if (C)
-    PtrArray->setComdat(C);
+    NewGV->setComdat(C);
 }
 
 void

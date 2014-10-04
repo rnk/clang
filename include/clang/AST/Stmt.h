@@ -1927,9 +1927,7 @@ public:
 
   bool getIsCXXTry() const { return IsCXXTry; }
 
-  CompoundStmt* getTryBlock() const {
-    return cast<CompoundStmt>(Children[TRY]);
-  }
+  Stmt *getTryBlock() const { return Children[TRY]; }
 
   Stmt *getHandler() const { return Children[HANDLER]; }
 

@@ -89,7 +89,7 @@ class MicrosoftMangleContextImpl : public MicrosoftMangleContext {
   llvm::DenseMap<DiscriminatorKeyTy, unsigned> Discriminator;
   llvm::DenseMap<const NamedDecl *, unsigned> Uniquifier;
   llvm::DenseMap<const CXXRecordDecl *, unsigned> LambdaIds;
-  llvm::DenseMap<const NamedDecl *, unsigned> SEHFilterIds;
+  llvm::DenseMap<const Decl *, unsigned> SEHFilterIds;
 
 public:
   MicrosoftMangleContextImpl(ASTContext &Context, DiagnosticsEngine &Diags)
@@ -135,7 +135,7 @@ public:
   void mangleDynamicInitializer(const VarDecl *D, raw_ostream &Out) override;
   void mangleDynamicAtExitDestructor(const VarDecl *D,
                                      raw_ostream &Out) override;
-  void mangleSEHFilterExpression(const NamedDecl *EnclosingDecl,
+  void mangleSEHFilterExpression(const Decl *EnclosingDecl,
                                  raw_ostream &Out) override;
   void mangleStringLiteral(const StringLiteral *SL, raw_ostream &Out) override;
   bool getNextDiscriminator(const NamedDecl *ND, unsigned &disc) {
@@ -237,7 +237,7 @@ public:
   void mangleFunctionType(const FunctionType *T,
                           const FunctionDecl *D = nullptr,
                           bool ForceThisQuals = false);
-  void mangleNestedName(const NamedDecl *ND);
+  void mangleNestedName(const Decl *ND);
 
 private:
   void mangleUnqualifiedName(const NamedDecl *ND) {
@@ -801,15 +801,15 @@ void MicrosoftCXXNameMangler::mangleUnqualifiedName(const NamedDecl *ND,
   }
 }
 
-void MicrosoftCXXNameMangler::mangleNestedName(const NamedDecl *ND) {
+void MicrosoftCXXNameMangler::mangleNestedName(const Decl *D) {
   // <postfix> ::= <unqualified-name> [<postfix>]
   //           ::= <substitution> [<postfix>]
-  const DeclContext *DC = getEffectiveDeclContext(ND);
+  const DeclContext *DC = getEffectiveDeclContext(D);
 
   while (!DC->isTranslationUnit()) {
-    if (isa<TagDecl>(ND) || isa<VarDecl>(ND)) {
+    if (isa<TagDecl>(D) || isa<VarDecl>(D)) {
       unsigned Disc;
-      if (Context.getNextDiscriminator(ND, Disc)) {
+      if (Context.getNextDiscriminator(cast<NamedDecl>(D), Disc)) {
         Out << '?';
         mangleNumber(Disc);
         Out << '?';
@@ -831,7 +831,8 @@ void MicrosoftCXXNameMangler::mangleNestedName(const NamedDecl *ND) {
     } else if (const ObjCMethodDecl *Method = dyn_cast<ObjCMethodDecl>(DC)) {
       mangleObjCMethodName(Method);
     } else if (isa<NamedDecl>(DC)) {
-      ND = cast<NamedDecl>(DC);
+      const NamedDecl *ND = cast<NamedDecl>(DC);
+      D = ND;
       if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(ND)) {
         mangle(FD, "?");
         break;
@@ -2321,16 +2322,16 @@ void MicrosoftMangleContextImpl::mangleCXXRTTICompleteObjectLocator(
   Mangler.getStream() << '@';
 }
 
-void MicrosoftMangleContextImpl::mangleSEHFilterExpression(
-    const NamedDecl *EnclosingDecl, raw_ostream &Out) {
+void
+MicrosoftMangleContextImpl::mangleSEHFilterExpression(const Decl *EnclosingDecl,
+                                                      raw_ostream &Out) {
   MicrosoftCXXNameMangler Mangler(*this, Out);
   // The function body is in the same comdat as the function with the handler,
   // so the numbering here doesn't have to be the same across TUs.
   //
   // <mangled-name> ::= ?filt$ <filter-number> @0
-  Mangler.getStream() << "\01?filt$" << SEHFilterIds[EnclosingDecl]++ << "@0@";
-  // FIXME
-  Mangler.mangleName(EnclosingDecl);
+  Mangler.getStream() << "\01?filt$" << SEHFilterIds[EnclosingDecl]++ << '@';
+  Mangler.mangleNestedName(EnclosingDecl);
 }
 
 void MicrosoftMangleContextImpl::mangleTypeName(QualType T, raw_ostream &Out) {

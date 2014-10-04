@@ -424,13 +424,20 @@ StmtResult Parser::ParseSEHTryBlock() {
 ///   seh-finally-block
 ///
 StmtResult Parser::ParseSEHTryBlockCommon(SourceLocation TryLoc) {
-  if(Tok.isNot(tok::l_brace))
+  if (Tok.isNot(tok::l_brace))
     return StmtError(Diag(Tok, diag::err_expected) << tok::l_brace);
 
-  StmtResult TryBlock(ParseCompoundStatement(/*isStmtExpr=*/false,
-                      Scope::DeclScope | Scope::SEHTryScope));
-  if(TryBlock.isInvalid())
+  // Create a captured statement for the try body. This has the effect of
+  // outlining it.
+  ParseScope CompoundScope(this, Scope::DeclScope | Scope::SEHTryScope);
+  Actions.ActOnCapturedRegionStart(Tok.getLocation(), getCurScope(), CR_Default,
+                                   1);
+  StmtResult TryBlock = ParseCompoundStatementBody(/*isStmtExpr=*/false);
+  if (TryBlock.isInvalid()) {
+    Actions.ActOnCapturedRegionError();
     return TryBlock;
+  }
+  TryBlock = Actions.ActOnCapturedRegionEnd(TryBlock.get());
 
   StmtResult Handler;
   if (Tok.is(tok::identifier) &&
@@ -444,12 +451,10 @@ StmtResult Parser::ParseSEHTryBlockCommon(SourceLocation TryLoc) {
     return StmtError(Diag(Tok,diag::err_seh_expected_handler));
   }
 
-  if(Handler.isInvalid())
+  if (Handler.isInvalid())
     return Handler;
 
-  return Actions.ActOnSEHTryBlock(false /* IsCXXTry */,
-                                  TryLoc,
-                                  TryBlock.get(),
+  return Actions.ActOnSEHTryBlock(/*IsCXXTry=*/false, TryLoc, TryBlock.get(),
                                   Handler.get());
 }
 

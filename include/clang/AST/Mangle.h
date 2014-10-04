@@ -28,6 +28,7 @@ namespace clang {
   class CXXConstructorDecl;
   class CXXDestructorDecl;
   class CXXMethodDecl;
+  class Decl;
   class FunctionDecl;
   class NamedDecl;
   class ObjCMethodDecl;
@@ -132,7 +133,7 @@ public:
   virtual void mangleDynamicAtExitDestructor(const VarDecl *D,
                                              raw_ostream &) = 0;
 
-  virtual void mangleSEHFilterExpression(const NamedDecl *EnclosingDecl,
+  virtual void mangleSEHFilterExpression(const Decl *EnclosingDecl,
                                          raw_ostream &Out) = 0;
 
   /// Generates a unique string for an externally visible type for use with TBAA

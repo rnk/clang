@@ -156,7 +156,7 @@ public:
   void mangleDynamicInitializer(const VarDecl *D, raw_ostream &Out) override;
   void mangleDynamicAtExitDestructor(const VarDecl *D,
                                      raw_ostream &Out) override;
-  void mangleSEHFilterExpression(const NamedDecl *EnclosingDecl,
+  void mangleSEHFilterExpression(const Decl *EnclosingDecl,
                                  raw_ostream &Out) override;
   void mangleItaniumThreadLocalInit(const VarDecl *D, raw_ostream &) override;
   void mangleItaniumThreadLocalWrapper(const VarDecl *D,
@@ -3840,14 +3840,14 @@ void ItaniumMangleContextImpl::mangleDynamicAtExitDestructor(const VarDecl *D,
     Mangler.getStream() << D->getName();
 }
 
-void ItaniumMangleContextImpl::mangleSEHFilterExpression(
-    const NamedDecl *EnclosingDecl, raw_ostream &Out) {
-  CXXNameMangler Mangler(*this, Out);
-  Mangler.getStream() << "__filt_";
-  if (shouldMangleDeclName(EnclosingDecl))
-    Mangler.mangle(EnclosingDecl);
-  else
-    Mangler.getStream() << EnclosingDecl->getName();
+void
+ItaniumMangleContextImpl::mangleSEHFilterExpression(const Decl *EnclosingDecl,
+                                                    raw_ostream &Out) {
+  // These names shouldn't be visible in the ABI due to use of comdats, so any
+  // name is OK.
+  // FIXME: Come up with a better mangling, especially since Mach-O doesn't
+  // support comdats.
+  Out << "__seh_filter_expression";
 }
 
 void ItaniumMangleContextImpl::mangleItaniumThreadLocalInit(const VarDecl *D,

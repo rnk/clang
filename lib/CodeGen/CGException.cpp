@@ -1717,9 +1717,47 @@ llvm::BasicBlock *CodeGenFunction::getEHResumeBlock(bool isCleanup) {
   return EHResumeBlock;
 }
 
+namespace {
+class CapturedTryBodyInfo : public CodeGenFunction::CGCapturedStmtInfo {
+public:
+  CapturedTryBodyInfo(const CapturedStmt &CS)
+      : CGCapturedStmtInfo(CS, CS.getCapturedRegionKind()) {}
+  StringRef getHelperName() const override { return "__seh_try_body"; }
+};
+}
+
 void CodeGenFunction::EmitSEHTryStmt(const SEHTryStmt &S) {
   EnterSEHTryStmt(S);
-  EmitStmt(S.getTryBlock());
+
+  const Stmt *Block = S.getTryBlock();
+  if (const auto *CS = dyn_cast<CapturedStmt>(Block)) {
+    // Emit the captured statement as a separate outlined function. Dress it up
+    // a bit with a custom function name.
+    llvm::Value *Context = GenerateCapturedStmtArgument(*CS);
+    CodeGenFunction CGF(CGM, true);
+    CGF.CapturedStmtInfo = new CapturedTryBodyInfo(*CS);
+    llvm::Function *F = CGF.GenerateCapturedStmtFunction(*CS);
+    delete CGF.CapturedStmtInfo;
+
+    // Put the try body into a comdat with the owning function. Nested try
+    // bodies will all end up in the same group.
+    CGM.addToComdatGroupIfPresent(CurFn, F);
+
+    // Add the 'noinline' and 'optnone' attributes.
+    llvm::AttrBuilder AB;
+    AB.addAttribute(llvm::Attribute::NoInline);
+    AB.addAttribute(llvm::Attribute::OptimizeNone);
+    F->addAttributes(llvm::AttributeSet::FunctionIndex,
+                     llvm::AttributeSet::get(F->getContext(),
+                                             llvm::AttributeSet::FunctionIndex,
+                                             AB));
+
+    // Invoke the try body from the current function.
+    EmitCallOrInvoke(F, Context);
+  } else {
+    EmitStmt(Block);
+  }
+
   ExitSEHTryStmt(S);
 }
 
@@ -1734,7 +1772,6 @@ struct PerformSEHFinally : EHScopeStack::Cleanup  {
 llvm::Constant *
 CodeGenFunction::GenerateSEHFilterFunction(CodeGenFunction &ParentCGF, 
                                            const SEHExceptStmt &Except) {
-  const Decl *ParentCodeDecl = ParentCGF.CurCodeDecl;
   llvm::Function *ParentFn = ParentCGF.CurFn;
 
   Expr *FilterExpr = Except.getFilterExpr();
@@ -1743,9 +1780,8 @@ CodeGenFunction::GenerateSEHFilterFunction(CodeGenFunction &ParentCGF,
   SmallString<128> Name;
   {
     llvm::raw_svector_ostream OS(Name);
-    const NamedDecl *Parent = dyn_cast_or_null<NamedDecl>(ParentCodeDecl);
-    assert(Parent && "FIXME: handle unnamed decls (lambdas, blocks) with SEH");
-    CGM.getCXXABI().getMangleContext().mangleSEHFilterExpression(Parent, OS);
+    CGM.getCXXABI().getMangleContext().mangleSEHFilterExpression(
+        ParentCGF.CurCodeDecl, OS);
   }
 
   // Arrange a function with the declaration:
@@ -1762,19 +1798,10 @@ CodeGenFunction::GenerateSEHFilterFunction(CodeGenFunction &ParentCGF,
   const CGFunctionInfo &FnInfo = CGM.getTypes().arrangeFreeFunctionDeclaration(
       RetTy, Args, FunctionType::ExtInfo(), /*isVariadic=*/false);
   llvm::FunctionType *FnTy = CGM.getTypes().GetFunctionType(FnInfo);
-  llvm::Function *Fn = llvm::Function::Create(FnTy, ParentFn->getLinkage(),
-                                              Name.str(), &CGM.getModule());
+  llvm::Function *Fn = llvm::Function::Create(
+      FnTy, llvm::GlobalValue::InternalLinkage, Name.str(), &CGM.getModule());
 
-  // The filter is either in the same comdat as the function, or it's internal.
-  if (llvm::Comdat *C = ParentFn->getComdat()) {
-    Fn->setComdat(C);
-  } else if (ParentFn->hasWeakLinkage() || ParentFn->hasLinkOnceLinkage()) {
-    llvm::Comdat *C = CGM.getModule().getOrInsertComdat(ParentFn->getName());
-    ParentFn->setComdat(C);
-    Fn->setComdat(C);
-  } else {
-    Fn->setLinkage(llvm::GlobalValue::InternalLinkage);
-  }
+  CGM.addToComdatGroupIfPresent(ParentFn, Fn);
 
   StartFunction(GlobalDecl(), RetTy, Fn, FnInfo, Args,
                 FilterExpr->getLocStart(), FilterExpr->getLocStart());

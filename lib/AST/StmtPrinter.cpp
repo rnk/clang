@@ -535,10 +535,16 @@ void StmtPrinter::VisitCXXTryStmt(CXXTryStmt *Node) {
 
 void StmtPrinter::VisitSEHTryStmt(SEHTryStmt *Node) {
   Indent() << (Node->getIsCXXTry() ? "try " : "__try ");
-  PrintRawCompoundStmt(Node->getTryBlock());
+  Stmt *Block = Node->getTryBlock();
+  if (auto *Captured = dyn_cast<CapturedStmt>(Block))
+    Block = Captured->getCapturedStmt();
+  if (CompoundStmt *CS = dyn_cast<CompoundStmt>(Block))
+    PrintRawCompoundStmt(CS);
+  else
+    PrintStmt(Block);
   SEHExceptStmt *E = Node->getExceptHandler();
   SEHFinallyStmt *F = Node->getFinallyHandler();
-  if(E)
+  if (E)
     PrintRawSEHExceptHandler(E);
   else {
     assert(F && "Must have a finally block...");

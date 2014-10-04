@@ -1087,6 +1087,11 @@ public:
   void setAliasAttributes(const Decl *D, llvm::GlobalValue *GV);
 
   void addReplacement(StringRef Name, llvm::Constant *C);
+
+  /// Adds NewGV to GV's comdat group if it has one. Does nothing otherwise, and
+  /// does nothing if the target does not support COMDATs.
+  void addToComdatGroupIfPresent(llvm::GlobalObject *GV,
+                                 llvm::GlobalObject *NewGV);
 private:
   llvm::Constant *
   GetOrCreateLLVMFunction(StringRef MangledName, llvm::Type *Ty, GlobalDecl D,
