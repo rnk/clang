@@ -37,9 +37,9 @@ class EHScope {
 
   class CommonBitFields {
     friend class EHScope;
-    unsigned Kind : 2;
+    unsigned Kind : 3;
   };
-  enum { NumCommonBits = 2 };
+  enum { NumCommonBits = 3 };
 
 protected:
   class CatchBitFields {
@@ -85,15 +85,23 @@ protected:
     unsigned NumFilters : 32 - NumCommonBits;
   };
 
+  class SEHExceptBitFields {
+    friend class SEHExceptScope;
+    unsigned : NumCommonBits;
+
+    unsigned ExceptThings : 1;
+  };
+
   union {
     CommonBitFields CommonBits;
     CatchBitFields CatchBits;
     CleanupBitFields CleanupBits;
     FilterBitFields FilterBits;
+    SEHExceptBitFields SEHExceptBits;
   };
 
 public:
-  enum Kind { Cleanup, Catch, Terminate, Filter };
+  enum Kind { Cleanup, Catch, Terminate, Filter, SEHExcept };
 
   EHScope(Kind kind, EHScopeStack::stable_iterator enclosingEHScope)
     : CachedLandingPad(nullptr), CachedEHDispatchBlock(nullptr),
@@ -449,6 +457,53 @@ public:
   }
 };
 
+/// An exceptions scope which runs a filter expression during phase one of SEH,
+/// passes control on to normal cleanups in phase 2, and then continues on to
+/// the except handler in phase two.
+class SEHExceptScope : public EHScope {
+public:
+  /// Similar to Type in EHCleanupScope::Handler, except this is a function
+  /// pointer.
+  llvm::Constant *FilterStub;
+
+  /// Basic block containing filter code. Will end with a call to
+  /// @llvm.eh.seh.filter(i32 %result), followed by some dispatch.
+  llvm::BasicBlock *FilterBlock;
+
+  /// Basic block that handles the exception and merges with normal control
+  /// flow.
+  llvm::BasicBlock *ExceptBlock;
+
+  struct LPadReturn {
+    int LPadId;
+    llvm::BasicBlock *LPadDispatch;
+  };
+
+  /// List of landing pads to return to after executing filter functions.
+  SmallVector<LPadReturn, 3> *LPadReturns;
+
+  SEHExceptScope(EHScopeStack::stable_iterator enclosingEHScope)
+      : EHScope(SEHExcept, enclosingEHScope), FilterStub(nullptr),
+        FilterBlock(nullptr), ExceptBlock(nullptr) {}
+
+  void Destroy() {
+    // Delete the basic blocks if we never inserted them into a function.
+    if (!FilterBlock->getParent())
+      delete FilterBlock;
+    if (!ExceptBlock->getParent())
+      delete ExceptBlock;
+    // Delete the small vector manually, since our destructor isn't
+    // automatically called.
+    delete LPadReturns;
+  }
+
+  static size_t getSize() { return sizeof(SEHExceptScope); }
+
+  static bool classof(const EHScope *scope) {
+    return scope->getKind() == SEHExcept;
+  }
+};
+
 /// A non-stable pointer into the scope stack.
 class EHScopeStack::iterator {
   char *Ptr;
@@ -485,6 +540,10 @@ public:
 
     case EHScope::Terminate:
       Ptr += EHTerminateScope::getSize();
+      break;
+
+    case EHScope::SEHExcept:
+      Ptr += SEHExceptScope::getSize();
       break;
     }
 

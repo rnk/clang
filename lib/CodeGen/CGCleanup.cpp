@@ -230,6 +230,22 @@ void EHScopeStack::pushTerminate() {
   InnermostEHScope = stable_begin();
 }
 
+SEHExceptScope *EHScopeStack::pushSEHExcept() {
+  char *Buffer = allocate(SEHExceptScope::getSize());
+  SEHExceptScope *Scope = new (Buffer) SEHExceptScope(InnermostEHScope);
+  InnermostEHScope = stable_begin();
+  return Scope;
+}
+
+void EHScopeStack::popSEHExcept() {
+  assert(!empty() && "popping exception stack when not empty");
+
+  SEHExceptScope &scope = cast<SEHExceptScope>(*begin());
+  scope.Destroy();
+  InnermostEHScope = scope.getEnclosingEHScope();
+  StartOfData += SEHExceptScope::getSize();
+}
+
 /// Remove any 'null' fixups on the stack.  However, we can't pop more
 /// fixups than the fixup depth on the innermost normal cleanup, or
 /// else fixups that we try to add to that cleanup will end up in the
