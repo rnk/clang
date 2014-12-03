@@ -2009,7 +2009,8 @@ public:
   void EnterSEHTryStmt(const SEHTryStmt &S);
   void ExitSEHTryStmt(const SEHTryStmt &S);
 
-  llvm::Constant *createSEHFilterStub(const SEHExceptStmt &S);
+  llvm::Constant *GenerateSEHFilterFunction(CodeGenFunction &ParentCGF,
+                                            const SEHExceptStmt &S);
 
   void EmitSEHExceptionCodeSave();
   llvm::Value *EmitSEHExceptionCode();

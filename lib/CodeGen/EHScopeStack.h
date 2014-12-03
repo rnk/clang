@@ -391,14 +391,6 @@ public:
   /// Pops a catch scope off the stack.  This is private to CGException.cpp.
   void popCatch();
 
-  /// Push an SEH except scope on the stack. Will conditionalize subsequent
-  /// cleanups.
-  class SEHExceptScope *pushSEHExcept();
-
-  /// Pop an SEH except scope off the stack.  This is private to
-  /// CGException.cpp.
-  void popSEHExcept();
-
   /// Push an exceptions filter on the stack.
   class EHFilterScope *pushFilter(unsigned NumFilters);
 

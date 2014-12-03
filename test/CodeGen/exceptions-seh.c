@@ -1,5 +1,7 @@
 // RUN: %clang_cc1 %s -triple x86_64-pc-win32 -fexceptions -fms-extensions -emit-llvm -o - | FileCheck %s
 
+// CHECK: @__clang_seh_filter_id = linkonce_odr thread_local(localdynamic) global i8* null
+
 // FIXME: Perform this outlining automatically CodeGen.
 void try_body(int numerator, int denominator, int *myres) {
   *myres = numerator / denominator;
@@ -25,10 +27,9 @@ int SafeDiv(int numerator, int denominator, int *res) {
 // CHECK:       to label %[[cont:[^ ]*]] unwind label %[[lpad:[^ ]*]]
 // CHECK: [[lpad]]
 // CHECK: landingpad { i8*, i32 } personality i8* bitcast (i32 (...)* @__C_specific_handler to i8*)
-// CHECK:       catch i32 (i8*, i8*)* @"\01?filt$0@0@SafeDiv@@"
-// CHECK: %[[sel:[^ ]*]] = load i32*
-// CHECK: %[[typeid:[^ ]*]] = call i32 @llvm.eh.typeid.for(i8* bitcast (i32 (i8*, i8*)* @"\01?filt$0@0@SafeDiv@@" to i8*))
-// CHECK: icmp eq i32 %[[sel]], %[[typeid]]
+// CHECK: catch i8* bitcast (i32 (i8*, i8*)* @"\01?filt$0@0@SafeDiv@@" to i8*)
+// CHECK: load i8** @__clang_seh_filter_id
+// CHECK: icmp eq i8* %{{.*}}, bitcast (i32 (i8*, i8*)* @"\01?filt$0@0@SafeDiv@@" to i8*)
 // CHECK: [[cont]]
 // CHECK: %[[myres:[^ ]*]] = load i32*
 // CHECK: store i32 %[[myres]], i32*
@@ -60,17 +61,14 @@ int nested_try() {
 //
 // CHECK: [[lpad]]
 // CHECK: landingpad { i8*, i32 } personality i8* bitcast (i32 (...)* @__C_specific_handler to i8*)
-// CHECK:       catch i32 (i8*, i8*)* @"\01?filt$0@0@nested_try@@"
-// CHECK:       catch i32 (i8*, i8*)* @"\01?filt$1@0@nested_try@@"
+// CHECK: catch i8* bitcast (i32 (i8*, i8*)* @"\01?filt$1@0@nested_try@@" to i8*)
+// CHECK: catch i8* bitcast (i32 (i8*, i8*)* @"\01?filt$0@0@nested_try@@" to i8*)
+// CHECK: load i8** @__clang_seh_filter_id
 //
-// CHECK: %[[sel:[^ ]*]] = load i32*
-// CHECK: %[[typeid:[^ ]*]] = call i32 @llvm.eh.typeid.for(i8* bitcast (i32 (i8*, i8*)* @"\01?filt$0@0@nested_try@@" to i8*))
-// CHECK: icmp eq i32 %[[sel]], %[[typeid]]
+// CHECK: icmp eq i8* %{{.*}}, bitcast (i32 (i8*, i8*)* @"\01?filt$1@0@nested_try@@" to i8*)
 // CHECK: br i1
 //
-// CHECK: %[[sel:[^ ]*]] = load i32*
-// CHECK: %[[typeid:[^ ]*]] = call i32 @llvm.eh.typeid.for(i8* bitcast (i32 (i8*, i8*)* @"\01?filt$1@0@nested_try@@" to i8*))
-// CHECK: icmp eq i32 %[[sel]], %[[typeid]]
+// CHECK: icmp eq i8* %{{.*}}, bitcast (i32 (i8*, i8*)* @"\01?filt$0@0@nested_try@@" to i8*)
 // CHECK: br i1
 //
 // CHECK: store i32 456, i32* %[[r]]
