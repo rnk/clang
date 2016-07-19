@@ -3303,6 +3303,10 @@ void MicrosoftVTableContext::computeVTablePaths(bool ForVBTables,
       // Copy the path and adjust it as necessary.
       VPtrInfo *P = new VPtrInfo(*BaseInfo);
 
+      // Remember the vptr we overrode.
+      P->OverriddenVPtr = BaseInfo;
+      P->DirectBase = Base;
+
       // We mangle Base into the path if the path would've been ambiguous and it
       // wasn't already extended with Base.
       if (P->MangledPath.empty() || P->MangledPath.back() != Base)

@@ -1546,8 +1546,18 @@ StringRef CGDebugInfo::getVTableName(const CXXRecordDecl *RD) {
 }
 
 void CGDebugInfo::CollectVTableInfo(const CXXRecordDecl *RD, llvm::DIFile *Unit,
-                                    SmallVectorImpl<llvm::Metadata *> &EltTys) {
+                                    SmallVectorImpl<llvm::Metadata *> &EltTys,
+                                    llvm::DIType *RecordTy) {
   const ASTRecordLayout &RL = CGM.getContext().getASTRecordLayout(RD);
+
+  // Emit information about MS ABI vftables, primarily for the benefit of
+  // codeview.
+  if (CGM.getTarget().getCXXABI().isMicrosoft() && RD->isDynamicClass()) {
+    const VPtrInfoVector &VFPtrs =
+        CGM.getMicrosoftVTableContext().getVFPtrOffsets(RD);
+    for (const VPtrInfo *VPI : VFPtrs)
+      EltTys.push_back(getMSVFTableType(VPI, RD, RecordTy));
+  }
 
   // If there is a primary base then it will hold vtable info.
   if (RL.getPrimaryBase())
@@ -1562,6 +1572,88 @@ void CGDebugInfo::CollectVTableInfo(const CXXRecordDecl *RD, llvm::DIFile *Unit,
       Unit, getVTableName(RD), Unit, 0, Size, 0, 0,
       llvm::DINode::FlagArtificial, getOrCreateVTablePtrType(Unit));
   EltTys.push_back(VPTR);
+}
+
+llvm::DIType *CGDebugInfo::getMSVFTableType(const VPtrInfo *VPI,
+                                            const CXXRecordDecl *RD,
+                                            llvm::DIType *RecordTy) {
+  assert(CGM.getTarget().getCXXABI().isMicrosoft());
+
+  // Check the cache to see if we've built vftable info already.
+  auto I = MSVFTableCache.find(VPI);
+  if (I != MSVFTableCache.end())
+    return cast<llvm::DIType>(I->second.get());
+
+  // Get the name of the vftable and it's offset.
+  auto &Mangler =
+      cast<MicrosoftMangleContext>(CGM.getCXXABI().getMangleContext());
+  SmallString<256> VFTableName;
+  llvm::raw_svector_ostream VFTableNameOS(VFTableName);
+  Mangler.mangleCXXVFTable(RD, VPI->MangledPath, VFTableNameOS);
+  uint64_t VFPtrOffsetInBits = CGM.getContext().toBits(VPI->FullOffsetInMDC);
+
+  // Get the overridden vftable type.
+  llvm::DIType *OverriddenVFTable = nullptr;
+  if (VPI->OverriddenVPtr) {
+    const CXXRecordDecl *Base = VPI->DirectBase;
+    llvm::DIType *BaseTy = getOrCreateRecordType(
+        CGM.getContext().getRecordType(Base), Base->getLocation());
+    OverriddenVFTable = getMSVFTableType(VPI->OverriddenVPtr, Base, BaseTy);
+  }
+
+  // Compute the mangled names used to fill out the vftable. Keep in sync with
+  // CodeGenVTables::CreateVTableInitializer.
+  const VTableLayout &VL = CGM.getMicrosoftVTableContext().getVFTableLayout(
+      RD, VPI->FullOffsetInMDC);
+  const VTableComponent *VComponents = VL.vtable_component_begin();
+  unsigned NumComponents = VL.getNumVTableComponents();
+  const auto *VTableThunks = VL.vtable_thunk_begin();
+  unsigned NumVTableThunks = VL.getNumVTableThunks();
+  unsigned NextVTableThunkIndex = 0;
+  SmallVector<llvm::Metadata *, 4> MethodNames;
+  for (unsigned I = 0; I < NumComponents; I++) {
+    const VTableComponent &VC = VComponents[I];
+    // Skip RTTI and other Itanium stuff.
+    if (!VC.isFunctionPointerKind())
+      continue;
+
+    const CXXMethodDecl *MD = VC.getFunctionDecl();
+    SmallString<128> MethodName;
+    if (MD->isPure()) {
+      MethodName = CGM.getCXXABI().GetPureVirtualCallName();
+    } else if (MD->isDeleted()) {
+      MethodName = CGM.getCXXABI().GetDeletedVirtualCallName();
+    } else {
+      // Figure out if this is a thunk vtable slot.
+      llvm::raw_svector_ostream MethodNameOS(MethodName);
+      if (NextVTableThunkIndex < NumVTableThunks &&
+          VTableThunks[NextVTableThunkIndex].first == I) {
+        const ThunkInfo &Thunk = VTableThunks[NextVTableThunkIndex].second;
+        NextVTableThunkIndex++;
+        if (VC.isDestructorKind())
+          Mangler.mangleCXXDtorThunk(VC.getDestructorDecl(), Dtor_Deleting,
+                                     Thunk.This, MethodNameOS);
+        else
+          Mangler.mangleThunk(MD, Thunk, MethodNameOS);
+      } else {
+        if (VC.isDestructorKind())
+          Mangler.mangleCXXDtor(VC.getDestructorDecl(), Dtor_Deleting,
+                                MethodNameOS);
+        else
+          Mangler.mangleName(MD, MethodNameOS);
+      }
+    }
+    MethodNames.push_back(
+        llvm::MDString::get(CGM.getLLVMContext(),
+                            llvm::GlobalValue::getRealLinkageName(MethodName)));
+  }
+
+  llvm::DIType *VFTy = DBuilder.createMSVFTable(
+      RecordTy, llvm::GlobalValue::getRealLinkageName(VFTableName),
+      VFPtrOffsetInBits, OverriddenVFTable,
+      llvm::MDTuple::get(CGM.getLLVMContext(), MethodNames), 0);
+  MSVFTableCache[VPI].reset(VFTy);
+  return VFTy;
 }
 
 llvm::DIType *CGDebugInfo::getOrCreateRecordType(QualType RTy,
@@ -1747,7 +1839,7 @@ llvm::DIType *CGDebugInfo::CreateTypeDefinition(const RecordType *Ty) {
   const auto *CXXDecl = dyn_cast<CXXRecordDecl>(RD);
   if (CXXDecl) {
     CollectCXXBases(CXXDecl, DefUnit, EltTys, FwdDecl);
-    CollectVTableInfo(CXXDecl, DefUnit, EltTys);
+    CollectVTableInfo(CXXDecl, DefUnit, EltTys, FwdDecl);
   }
 
   // Collect data fields (including static variables and any initializers).

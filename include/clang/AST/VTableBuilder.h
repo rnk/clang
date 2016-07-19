@@ -409,6 +409,13 @@ struct VPtrInfo {
   /// methods or virtual bases.
   const CXXRecordDecl *IntroducingObject;
 
+  /// Link to the vptr we are overriding from our base, or null the vptr was
+  /// introduced in this class.
+  const VPtrInfo *OverriddenVPtr = nullptr;
+
+  /// The direct base that we got this vptr from.
+  const CXXRecordDecl *DirectBase = nullptr;
+
   /// IntroducingObject is at this offset from its containing complete object or
   /// virtual base.
   CharUnits NonVirtualOffset;

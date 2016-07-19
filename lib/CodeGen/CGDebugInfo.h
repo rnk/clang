@@ -22,6 +22,7 @@
 #include "clang/Frontend/CodeGenOptions.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/Optional.h"
+#include "llvm/ADT/TinyPtrVector.h"
 #include "llvm/IR/DIBuilder.h"
 #include "llvm/IR/DebugInfo.h"
 #include "llvm/IR/ValueHandle.h"
@@ -40,6 +41,7 @@ class ObjCInterfaceDecl;
 class ObjCIvarDecl;
 class UsingDecl;
 class VarDecl;
+struct VPtrInfo;
 
 namespace CodeGen {
 class CodeGenModule;
@@ -128,6 +130,7 @@ class CGDebugInfo {
       NamespaceAliasCache;
   llvm::DenseMap<const Decl *, llvm::TypedTrackingMDRef<llvm::DIDerivedType>>
       StaticDataMemberCache;
+  llvm::DenseMap<const VPtrInfo *, llvm::TrackingMDRef> MSVFTableCache;
 
   /// Helper functions for getOrCreateType.
   /// @{
@@ -263,7 +266,13 @@ class CGDebugInfo {
   /// If the C++ class has vtable info then insert appropriate debug
   /// info entry in EltTys vector.
   void CollectVTableInfo(const CXXRecordDecl *Decl, llvm::DIFile *F,
-                         SmallVectorImpl<llvm::Metadata *> &EltTys);
+                         SmallVectorImpl<llvm::Metadata *> &EltTys,
+                         llvm::DIType *RecordTy);
+
+  /// Get the DW_TAG_LLVM_msvftable type for this vptr.
+  llvm::DIType *getMSVFTableType(const VPtrInfo *VPI, const CXXRecordDecl *RD,
+                                 llvm::DIType *RecordTy);
+
   /// @}
 
   /// Create a new lexical block node and push it on the stack.

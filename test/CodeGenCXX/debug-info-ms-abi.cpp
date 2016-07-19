@@ -15,7 +15,11 @@ Foo::Nested n;
 // CHECK-SAME: elements: ![[elements:[0-9]+]]
 // CHECK-SAME: identifier: ".?AUFoo@@"
 
-// CHECK: ![[elements]] = !{![[vptr:[0-9]+]], ![[Nested:[0-9]+]], ![[f:[0-9]+]], ![[g:[0-9]+]], ![[h:[0-9]+]]}
+// CHECK: ![[elements]] = !{![[vftable:[0-9]+]], ![[vptr:[0-9]+]], ![[Nested:[0-9]+]], ![[f:[0-9]+]], ![[g:[0-9]+]], ![[h:[0-9]+]]}
+
+// CHECK: ![[vftable]] = !DIDerivedType(tag: DW_TAG_LLVM_msvftable, name: "??_7Foo@@6B@", scope: ![[Foo]], baseType: null, extraData: ![[methodlist:[0-9]+]])
+
+// CHECK: ![[methodlist]] = !{!"?f@Foo@@UAEXXZ", !"?g@Foo@@UAEXXZ", !"?h@Foo@@UAEXXZ"}
 
 // CHECK: ![[Nested]] = distinct !DICompositeType(tag: DW_TAG_structure_type, name: "Nested",
 // CHECK-SAME: identifier: ".?AUNested@Foo@@"
